@@ -21,7 +21,7 @@ import webbrowser
 
 
 HERE = Path(__file__).resolve().parent
-APP_VERSION = "v0.14.0 beta"
+APP_VERSION = "v1.0.0"
 PACKAGES = {"pywin32": "win32com.client", "beautifulsoup4": "bs4", "python-docx": "docx", "Pillow": "PIL.Image"}
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MAX_FILE = 100 * 1024 * 1024
