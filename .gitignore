@@ -1,7 +1,7 @@
 __pycache__/
 *.pyc
+*.exe
 release/
-报告转公众号.exe
 .build-venv/
 build/
 dist/
