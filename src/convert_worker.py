@@ -204,7 +204,6 @@ def apply_detection(detected, toc: bool, progress):
         progress.note(f"[AUTO] 报告类型：{KIND_LABELS[title_kind]}")
     else:
         progress.note(f"[AUTO] 报告类型：{KIND_LABELS[title_kind]}（正文按{KIND_LABELS[framework]}框架提取）")
-    progress.note("[modes] " + ",".join(modes))   # 供结果页按实际框架估算完成时间
     return modes, toc, title_kind
 
 
@@ -424,12 +423,12 @@ def _forecast_heading_like(block, text: str) -> bool:
     return _forecast_name_like(text[:-len(FORECAST_KEYWORD)]) and _all_text_bold(block)
 
 
-def strip_forecast_tables(soup) -> bool:
-    """按设置省略正文末尾的「XX三大财务预测表」区块（标题段 + 表格图片 + 来源/注）。
+def locate_forecast_tables(soup) -> list:
+    """找出正文末尾的「XX三大财务预测表」区块（标题段 + 表格图片 + 来源/注），返回其顶层块列表。
 
     只认**最早**的加粗标题候选：其后直到正文结束只允许纯图片段（去图后无文字）
-    与来源/注说明段，且至少要有一个图片段；验证失败即整体不动，不再尝试更靠后的
-    候选（防止真三表保留却误报“已省略”）。返回是否移除。"""
+    与来源/注说明段，且至少要有一个图片段；验证失败即返回空列表，不再尝试更靠后的
+    候选（防止真三表保留却误报“已省略”，或把半截正文当三表附给点评）。"""
     body = soup.body if soup.body is not None else soup
     blocks = [child for child in body.children if getattr(child, "name", None)]
     for start, block in enumerate(blocks):
@@ -439,29 +438,145 @@ def strip_forecast_tables(soup) -> bool:
         has_image = False
         for tail in blocks[start + 1:]:
             if tail.name != "p":
-                return False
+                return []
             tail_text = re.sub(r"\s+", "", tail.get_text())
             if tail.find("img"):
                 if tail_text:      # 图片段夹带文字：不是纯表格图，宁可整体保留
-                    return False
+                    return []
                 has_image = True
             elif not _forecast_note_like(tail_text):
-                return False
+                return []
         if not has_image:
-            return False
-        for doomed in blocks[start:]:
-            doomed.decompose()
-        return True
-    return False
+            return []
+        return blocks[start:]
+    return []
 
 
-def self_check_hint(modes: list, checks_ran: bool) -> str:
+def strip_forecast_tables(soup) -> bool:
+    """深度框架默认路径：按设置省略文末三表区块。返回是否移除。"""
+    doomed = locate_forecast_tables(soup)
+    for block in doomed:
+        block.decompose()
+    return bool(doomed)
+
+
+def extract_forecast_tables(soup) -> list:
+    """点评框架勾选三表时的反向路径：把同一判据认出的区块从正文成品里摘出来，
+    供拼到摘要之后。找不到返回空列表，正文成品不动。"""
+    blocks = locate_forecast_tables(soup)
+    for block in blocks:
+        block.extract()
+    return blocks
+
+
+def self_check_hint(modes: list, checks_ran: bool, forecast_appended: bool = False) -> str:
     """完成但无自检结论（灰色信息条）时的提示语，按模式区分。"""
     if not any(m in modes for m in ("body", "weekly")):
+        if forecast_appended:
+            return "确认摘要文字与三表后复制到公众号编辑器"
         return "点评摘要不含图表，确认文字内容后复制到公众号编辑器"
     if not checks_ran:
         return "未能自动对账图表与文字，请人工核对后复制到公众号编辑器"
     return ""
+
+
+def wants_forecast_append(modes: list, forecast_tables: bool) -> bool:
+    """点评框架（只取摘要）勾选三表时，另跑一遍正文管线把文末三表摘出来附在摘要后。
+    正文/周报框架不走这条：正文框架的三表本就在成品里，由 strip 决定去留。"""
+    return bool(forecast_tables) and modes == ["summary"]
+
+
+def plan_steps(modes: list, forecast_append: bool) -> int:
+    return 3 + len(modes) + (1 if forecast_append else 0)
+
+
+def note_modes(progress, modes: list, forecast_append: bool) -> None:
+    """[modes] 行供结果页按实际框架估算完成时间；点评附三表要多跑一遍正文管线，
+    以 forecast 伪模式告知前端把这一遍算进预估。"""
+    progress.note("[modes] " + ",".join(modes + (["forecast"] if forecast_append else [])))
+
+
+def forecast_tail_problems(cleaner) -> list:
+    """清洗器记录的丢图问题里，落在三表区块范围内的那些。
+
+    这个范围是按**文字**推出来的保守区间，起点可能早于真正的标题段（见下），
+    所以「区块之内」是宽口径，不是严格等于摘取器认定的那几块。
+
+    记录都在 `HtmlCleaner` 里就地产生并带上源块序号：主判据是逐地址对账——源块里
+    这个图片地址出现几次、成品就该用掉几次，少用一次记一条（记在真正进入 spec 的
+    时点，不是读到的时点：表格的题注/来源行会连图一起被剪掉）；另有图片地址解析
+    不出来、表格转图时单元格里的图读不到、整块渲染后一张图都不剩三种情形单独记录。
+    判据建在渲染器自己的记录上，而不是另写一套「源文档里该有几张图」去和它对账——
+    那要把渲染器的分类规则（嵌套表算一张、表内图并进表图、兼容分支只算一支）
+    复制一份，两处迟早对不上。
+
+    序号用来把判断大致限定在区块附近：报告别处的丢图不该让用户白白丢掉这个功能。
+    起点取**最早**一个够格当标题的已渲染块，与摘取器只认最早候选的规则一致：
+    文字以关键词结尾、不是注/来源段、其前缀形如证券简称。取最早而不是最晚，是因为
+    这里只有文字、没有加粗信息：正文里若先有一句「详见文末XX三大财务预测表」，
+    起点就落在它上面，范围比真区块宽——代价是多一次「放弃并告警」，
+    换来的是文末一句「注：详见XX三大财务预测表」不会把起点推到真标题之后、
+    把区块内的丢图记录挡在范围外。"""
+    problems = list(getattr(cleaner, "render_problems", []))
+    if not problems:
+        return []
+    start = None
+    for idx, text in getattr(cleaner, "rendered_block_texts", []):
+        text = re.sub(r"\s+", "", text)
+        if not text.endswith(FORECAST_KEYWORD) or _forecast_note_like(text):
+            continue
+        if _forecast_name_like(text[:-len(FORECAST_KEYWORD)]):
+            start = idx
+            break
+    if start is None:
+        return [p["message"] for p in problems]      # 定位不到区块：一律从严
+    return [p["message"] for p in problems if p["idx"] >= start]
+
+
+def render_forecast_tables(root: Path, source: Path, word, temporary: Path) -> list:
+    """按正文管线转换全文，只取文末三表区块（与深度框架的剥除判据完全相同）。
+
+    这一遍的引擎输出全部截住，不进任务日志：全文里大半内容（封面、首页估值表）转完
+    就丢，它们的 skipped/fallback 提示与成品无关，不该在点评结果页上亮红条。
+
+    整遍失败即放弃（抛出说明，调用方转成一条告警、仍输出摘要）。渲染器一贯的策略是
+    「失败就跳过这一张、继续往下」，区块里若有一张表没渲染出来、另一张还在，位置判据
+    仍然通过，半截三表就会被当成完整的附上去。两层判据：
+
+    ① 区块范围内的丢图记录（`forecast_tail_problems`）：清洗器按「源块里这个地址出现
+       几次、成品就该用掉几次」记账并就地记录，与源文档格式无关，`.doc` 同样有效；
+       按源块序号取用，范围是按文字推出的保守区间（起点可能早于真标题段，宁宽不窄）。
+    ② 摘出的区块里每张图必须是内嵌的 `data:` 图，不能是死链。
+
+    这一遍的引擎输出仍然整体截住不进任务日志（全文里大半内容转完就丢，它们的提示与
+    成品无关），但**不再**拿日志行当判据：真正的丢图都已在 ① 里带序号记下，
+    拿全局日志行判断只会让区块之外的问题误伤一次本来完整的附加。
+
+    覆盖范围：核对的是「渲染器有没有把源块里的图弄丢」，不是「成品与源文档逐项对应」。
+    渲染器把某张表换成另一张图而自身毫无察觉，不在覆盖范围内。"""
+    import io
+    from contextlib import redirect_stdout
+    from bs4 import BeautifulSoup
+
+    cfg = engine.load_config("body", root / "configs")
+    cfg["output"].update(generate_html=True, generate_docx=False)
+    cfg.setdefault("front_matter", {}).update(enable=False, include_summary=False, include_toc_image=False)
+    part_dir = temporary / "forecast"
+    part_dir.mkdir()
+    cleaner = engine.HtmlCleaner(cfg)
+    captured = io.StringIO()
+    with redirect_stdout(captured):
+        result = engine.process_one_file(source, part_dir, cleaner, word, cfg)
+    rendered = Path(result["html"]).read_text(encoding="utf-8")
+    blocks = extract_forecast_tables(BeautifulSoup(rendered, "html.parser"))
+    images = [image for block in blocks for image in block.find_all("img")]
+    problems = forecast_tail_problems(cleaner)
+    if problems:
+        raise RuntimeError("三表区块的转换有内容丢失，为免附上残缺的三表而放弃：" + problems[0])
+    for image in images:
+        if not str(image.get("src") or "").startswith("data:"):
+            raise RuntimeError("三表区块里有未内嵌的图片，为免附上残缺的三表而放弃。")
+    return blocks
 
 
 def convert(root: Path, source: Path, modes: list, output: Path, toc: bool,
@@ -474,23 +589,30 @@ def convert(root: Path, source: Path, modes: list, output: Path, toc: bool,
     auto = modes == [AUTO]
     detected = None
     title_kind = ""
+    forecast_append = False
     if auto:
         progress.note("正在识别报告类型…")
         detected = detect_kind_from_docx(root, source)
         if detected:
             modes, toc, title_kind = apply_detection(detected, toc, progress)
-    progress.plan(3 + (2 if auto and not detected else len(modes)))
+    if not auto or detected:
+        forecast_append = wants_forecast_append(modes, forecast_tables)
+        note_modes(progress, modes, forecast_append)
+    progress.plan(5 if auto and not detected else plan_steps(modes, forecast_append))
     try:
         with tempfile.TemporaryDirectory(prefix="conversion_", dir=output.parent) as temporary:
             tempfile.tempdir = temporary
             fragments = []
+            forecast_blocks = []
             final_html = None
             progress.step("启动 Word 引擎")
             with engine.WordApp(image_ppi=engine.resolve_image_ppi(engine.load_config("body", root / "configs"))) as word:
                 if auto and not detected:
                     detected = detect_kind_with_word(root, word, source)
                     modes, toc, title_kind = apply_detection(detected, toc, progress)
-                    progress.plan(3 + len(modes))
+                    forecast_append = wants_forecast_append(modes, forecast_tables)
+                    note_modes(progress, modes, forecast_append)
+                    progress.plan(plan_steps(modes, forecast_append))
                 configs = {mode: engine.load_config(mode, root / "configs")
                            for mode in MODES if mode in modes}
                 if "weekly" in configs:
@@ -517,6 +639,18 @@ def convert(root: Path, source: Path, modes: list, output: Path, toc: bool,
                                 source, part_dir, word, engine.load_config("body", root / "configs")))
                     final_html = rendered
                     print(f"  -> {MODE_LABELS[mode]}完成", flush=True)
+                if forecast_append:
+                    progress.step("提取文末三大财务预测表（按正文管线转换全文）")
+                    try:
+                        forecast_blocks = render_forecast_tables(root, source, word, Path(temporary))
+                    except Exception as exc:
+                        # 摘要已经拿到手：三表这一遍失败只告警，不让整份点评作废
+                        progress.note(f"[warn] 未能提取文末三大财务预测表：{exc}")
+                    else:
+                        if forecast_blocks:
+                            print("  -> 三表完成", flush=True)
+                        else:
+                            progress.note("[warn] 未找到文末三大财务预测表，仅输出摘要")
             progress.step("合并内容并写出 HTML")
             soup = BeautifulSoup(final_html, "html.parser")
             main_title = resolve_main_title(word.main_title, word.subtitle, source)
@@ -533,6 +667,10 @@ def convert(root: Path, source: Path, modes: list, output: Path, toc: bool,
                     style.decompose()
             for fragment in reversed(fragments):
                 soup.body.insert(0, BeautifulSoup(fragment, "html.parser"))
+            for block in forecast_blocks:
+                soup.body.append(block)
+            if forecast_blocks:
+                progress.note("已按设置在摘要后附上文末三大财务预测表")
             if not soup.body.get_text(strip=True) and not soup.body.find("img"):
                 raise RuntimeError("转换结果为空，未生成 HTML。")
             output.write_text(str(soup), encoding="utf-8")
@@ -554,7 +692,8 @@ def convert(root: Path, source: Path, modes: list, output: Path, toc: bool,
             return {"title": word.report_title, "main_title": main_title,
                     "subtitle": word.subtitle, "report_kind": KIND_LABELS.get(title_kind, ""),
                     "self_check": self_check, "forecast_stripped": bool(stripped_forecast),
-                    "self_check_hint": self_check_hint(modes, bool(ran))}
+                    "forecast_appended": bool(forecast_blocks),
+                    "self_check_hint": self_check_hint(modes, bool(ran), bool(forecast_blocks))}
     finally:
         tempfile.tempdir = old_temp
 

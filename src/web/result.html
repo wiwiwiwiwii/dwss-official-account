@@ -59,18 +59,21 @@ function renderConsole(item){const progress=item.progress||{},total=Number(progr
 let shownIndex=-1,expired=false,serverNow=0,jobModes=[],tabsSignature='',titleIndex=-1;
 function fmtDuration(seconds){const s=Math.max(0,Math.round(seconds));return s<60?`${s} 秒`:`${Math.floor(s/60)} 分 ${String(s%60).padStart(2,'0')} 秒`;}
 function estimateSeconds(stats,modes){
-  // 系数来自 tests/perf-v0120：52 份真实样本回归（i7-13700K 台机）× 轻薄本换算 1.40
-  // （标定 Core Ultra 5 225H / R7 7840 级，取最慢目标；宁可稍高估）
+  // 系数来自 tests/perf-v0120：52 份真实样本回归（i7-13700K 台机）× 换算系数 2.80
+  // （v0.12.0 按轻薄本单核基准定 1.40；v1.1.0 按用户实测「预估 14 秒、实跑 45 秒」翻倍，宁可高估）
   if(!stats||!Array.isArray(modes))return null;
   const mode=modes.includes('weekly')?'weekly':modes.includes('body')?'depth':modes.includes('summary')?'summary':null;
   if(!mode)return null;
   const size=Number(stats.size),mediaBytes=Number(stats.media_bytes),chars=Number(stats.chars);
+  const depthSeconds=()=>{if(!Number.isFinite(size)||size<0||!Number.isFinite(mediaBytes)||mediaBytes<0||!Number.isFinite(chars)||chars<0)return null;
+    return 12.353858+2.5927*Math.max(0,size-mediaBytes)/1e6+4.08198*chars/1e4;};
   let s;
-  if(mode==='summary')s=9.899625;
+  if(mode==='summary'){s=9.899625;
+    // 点评附三表（worker 回传 forecast 伪模式）要再按正文管线转一遍全文：加一份正文预估
+    if(modes.includes('forecast')){const extra=depthSeconds();if(extra==null)return null;s+=extra;}}
   else if(mode==='weekly'){if(!Number.isFinite(size)||size<0)return null;s=4.700497+3.432233*Math.sqrt(size/1e6);}
-  else{if(!Number.isFinite(size)||size<0||!Number.isFinite(mediaBytes)||mediaBytes<0||!Number.isFinite(chars)||chars<0)return null;
-    s=12.353858+2.5927*Math.max(0,size-mediaBytes)/1e6+4.08198*chars/1e4;}
-  return Math.ceil(s*1.40);
+  else{s=depthSeconds();if(s==null)return null;}
+  return Math.ceil(s*2.80);
 }
 function runningBanner(item){const eta=estimateSeconds(item.stats,item.detected_modes||jobModes);const run=item.started&&serverNow?serverNow-item.started:null;
   if(eta==null&&run==null)return '';
@@ -88,7 +91,7 @@ function show(index){if(expired)return;const item=items[index];if(index!==shownI
     if(titleIndex!==index||titleInput.value!==wanted){titleInput.value=wanted;titleIndex=index;}
     titleInput.disabled=false;titleButton.disabled=!titleInput.value.trim();sizeTitle();    // 三表是按设置主动省略的，完成态也要说出来：否则「自检通过：…完整保留」
     // 容易被读成“源报告内容一字未减”
-    const omitted=item.forecast_stripped?'已按设置省略文末三大财务预测表；':'';
+    const omitted=item.forecast_stripped?'已按设置省略文末三大财务预测表；':item.forecast_appended?'已按设置在摘要后附上文末三大财务预测表；':'';
     status.textContent=item.warnings?.length?'⚠ '+omitted+item.warnings.map(w=>w.replace(/^\s*\[warn\]\s*/,'')).join('；'): (item.self_check?`✓ ${omitted}自检通过：${item.self_check}完整保留，可复制到公众号编辑器`:(omitted+(item.self_check_hint||'检查文字、图表和来源后，复制到公众号编辑器')));if(loaded!==item.url){loaded=item.url;copyButton.disabled=true;frame.src=new URL(item.url,document.baseURI).href;}}
   else{titleInput.disabled=true;titleButton.disabled=true;
     if(item.state==='running'){status.textContent=runningBanner(item);status.classList.add('info');status.classList.remove('warn');}

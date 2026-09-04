@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import copy
 import html
+from collections import Counter
 import json
 import mimetypes
 import re
@@ -1500,6 +1501,35 @@ class HtmlCleaner:
         self.generated_dir: Optional[Path] = None
         self.source_docx_path: Optional[Path] = None
         self._valuation_cache: Optional[dict] = None
+        # 本次清洗中「源里有图、成品里没有」的结构化记录，每条带源块序号 idx。
+        # 渲染器一贯的策略是失败即跳过并继续，成品因此可能少一张图而外观完好；
+        # 点评附三表那一遍据此判断摘出的区块是否完整（见 convert_worker）。序号用来
+        # 把判断限定在三表区块自身，报告别处的问题不牵连它。只记录，不改渲染结果。
+        self.render_problems: List[dict] = []
+        # 每个进入成品的源块的 (序号, 归一化文字)，供调用方按文字定位区块起点。
+        self.rendered_block_texts: List[Tuple[int, str]] = []
+        self._current_block_idx = -1
+        # 本次清洗中「真正被成品用掉」的图片，按 (源块序号, src) 计数。计数而不是集合：
+        # 同一地址在一块里出现两次、只用掉一次时，集合会把另一次也当成用过了。
+        # 记在「用掉」而不是「读到」的时点：渲染器可能读了图又把它所在的行剪掉
+        # （表格的题注/来源行），也可能整支子树都不走（wrapper 表选中内层网格转图），
+        # 两种丢法在取址出口上都看不见，只能靠「源块里的图有没有被用掉」兜住。
+        self._visited_image_counts: Counter = Counter()
+
+    def _note_render_problem(self, message: str) -> None:
+        self.render_problems.append({"idx": self._current_block_idx, "message": message})
+
+    def _note_visited_image(self, src: str) -> None:
+        self._visited_image_counts[(self._current_block_idx, (src or "").strip())] += 1
+
+    @staticmethod
+    def _image_srcs(tag: Tag) -> List[str]:
+        srcs = []
+        for node in tag.find_all(True):
+            if (node.name or "").lower() in {"img", "v:imagedata"}:
+                src = node.get("src", "") or node.get("o:href", "") or node.get("href", "")
+                srcs.append((src or "").strip())
+        return srcs
 
     def set_heading_outline(self, outline: List[dict]) -> None:
         self.heading_outline = list(outline or [])
@@ -1517,6 +1547,10 @@ class HtmlCleaner:
         # 上一文件的 temp 目录已在 finally 删除，不能让下一文件命中已删除的旧路径。
         self._img_data_cache = {}
         self._img_tmp_counter = 0
+        self.render_problems = []
+        self.rendered_block_texts = []
+        self._current_block_idx = -1
+        self._visited_image_counts = Counter()
 
         html_text = read_text_auto(html_path)
         soup = BeautifulSoup(html_text, "html.parser")
@@ -1526,6 +1560,7 @@ class HtmlCleaner:
         if not blocks:
             raise ProcessingError(f"No usable content found in HTML: {html_path}")
 
+        self._current_block_idx = -1
         self._mark_toc_blocks(blocks)
         start_idx = self._find_start_index(blocks)
         stop_idx = self._find_stop_index(blocks, start_idx)
@@ -1543,10 +1578,26 @@ class HtmlCleaner:
         for block in blocks:
             if block.drop:
                 continue
+            self._current_block_idx = block.idx
+            # 不在这里清空 _visited_image_counts：表格规格是在渲染循环之前的
+            # _mark_media_related_blocks 里建好的，清空会把那批用图记录抹掉
             rendered = self._render_block(block, for_docx=False)
             rendered = rendered.strip()
+            source_srcs = self._image_srcs(block.tag)
+            # 源块里有图、渲染结果却一张也没有：这一块整个消失了（如 remove_tables 下
+            # 的单格图片表），既不报错也不打日志，只有这里能记下来
+            if source_srcs and "<img" not in rendered:
+                self._note_render_problem("源块中的图片没有进入成品")
+            # 源块里有几张图，成品就该用掉几张。逐地址比对出现次数与用掉次数：
+            # 分类器只走一支子树、题注/来源行连图一起被剪掉，都会在这里露出来
+            for src, needed in Counter(source_srcs).items():
+                used = self._visited_image_counts.get((block.idx, src), 0)
+                if used < needed:
+                    self._note_render_problem(
+                        f"源块中的图片没有被成品用掉（{needed} 张里只用了 {used} 张）：{src[:120]!r}")
             if rendered:
                 rendered_blocks.append(rendered)
+                self.rendered_block_texts.append((block.idx, normalize_text(block.tag.get_text(" ", strip=True))))
             if need_docx_html:
                 rendered_docx = self._render_block(block, for_docx=True)
                 rendered_docx = rendered_docx.strip()
@@ -1569,6 +1620,12 @@ class HtmlCleaner:
             self._wrap_full_html("\n".join(rendered_blocks_docx or rendered_blocks)),
             dict(self.asset_map),
         )
+
+    @staticmethod
+    def _block_has_image(tag: Tag) -> bool:
+        return tag.find(
+            lambda t: isinstance(t, Tag) and (t.name or "").lower() in {"img", "v:imagedata"}
+        ) is not None
 
     def _mark_toc_blocks(self, blocks: List[Block]) -> None:
         if not self.doc_cfg.get("remove_toc", True):
@@ -1728,6 +1785,7 @@ class HtmlCleaner:
                 spec = self._grid_rows_to_spec(self._table_direct_rows(nested), set())
                 if spec is None:
                     print("  -> figure-frame pasted table skipped: unrenderable grid")
+                    self._note_render_problem("图框内贴入的表格无法渲染（网格不可解析）")
                 if spec is not None:
                     import sys
                     if str(SCRIPT_DIR) not in sys.path:
@@ -1740,6 +1798,7 @@ class HtmlCleaner:
                     print(f"  -> figure-frame pasted table image: {spec['nrows']} rows x {spec['ncols']} cols")
             except Exception as e:
                 print(f"  -> figure-frame pasted table skipped: {e}")
+                self._note_render_problem(f"图框内贴入的表格渲染失败：{e}")
         cache[key] = png_path
         return png_path or None
 
@@ -2088,6 +2147,10 @@ class HtmlCleaner:
             resolved = self._resolve_local_image(src)
             if resolved:
                 files.append(resolved)
+            else:
+                # 表格转图时单元格里的图取不到：整表照样渲染成一张完好的 PNG，
+                # 少掉的那张图在成品里看不出来，只有这里能记下
+                self._note_render_problem(f"表格单元格里的图片无法读取：{(src or '').strip()[:120]!r}")
         return files
 
     def _cell_own_text(self, cell: Tag) -> str:
@@ -2388,6 +2451,10 @@ class HtmlCleaner:
                 "align": self._cell_align(p["cell"]),
                 "bold": self._cell_is_bold(p["cell"]),
             })
+            # 只有真正进了 spec 的单元格才算「这张图被用掉了」。题注/来源行在上面被剪掉，
+            # 它们里面的图不会进表图——若在读取时就记成已访问，这类丢图就查不出来了
+            for src in self._image_srcs(p["cell"]):
+                self._note_visited_image(src)
         nb = len(kept_rows)
         nc = len(kept_cols)
         if nb < 1 or nc < 2 or not spec_cells:
@@ -2427,6 +2494,7 @@ class HtmlCleaner:
             print(f"  -> data table image: {spec['nrows']} rows x {spec['ncols']} cols (block {block.idx})")
         except Exception as e:
             print(f"  -> data table skipped (block {block.idx}): {e}")
+            self._note_render_problem(f"表图渲染失败（block {block.idx}）：{e}")
             block.table_png_path = ""
         return block.table_png_path or None
 
@@ -2674,6 +2742,9 @@ class HtmlCleaner:
         for block in blocks:
             if block.drop:
                 continue
+            # 这一趟就会解析表格规格并读取单元格里的图片，丢图记录必须落在正确的源块上：
+            # 少了这一行，预处理期的记录都挂到 idx=-1，按序号取区块内记录时会被漏掉
+            self._current_block_idx = block.idx
 
             if block.tag.name == "table":
                 # 估值表(行业公司估值表)：用专门的 11 列渲染器(valuation_table_image)转图，最优先。
@@ -3350,6 +3421,20 @@ class HtmlCleaner:
         return html_text.strip()
 
     def _register_asset(self, src: str, inline: bool = False) -> str:
+        """把图片地址换成成品里能用的地址（inline 时是 data: URI）。
+
+        取不到时返回空串或原样地址，调用方一律跳过该图——外观上看不出少了图，
+        所以这里同时把「没换成 data:」记进 render_problems 供调用方判断成品是否完整。"""
+        self._note_visited_image(src)
+        resolved = self._resolve_asset(src, inline=inline)
+        if not resolved:
+            self._note_render_problem(f"图片地址为空或无法解析：{(src or '').strip()[:120]!r}")
+        elif inline and not resolved.startswith(("data:", "http://", "https://")):
+            # inline 输出必须内嵌字节；仍是原地址说明文件不在本机，成品里会是一个死链
+            self._note_render_problem(f"图片未能内嵌，源文件不可读：{resolved[:120]!r}")
+        return resolved
+
+    def _resolve_asset(self, src: str, inline: bool = False) -> str:
         src = (src or "").strip()
         if not src:
             return ""

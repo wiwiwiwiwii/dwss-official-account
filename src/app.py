@@ -21,7 +21,7 @@ import webbrowser
 
 
 HERE = Path(__file__).resolve().parent
-APP_VERSION = "v1.0.0"
+APP_VERSION = "v1.1.0"
 PACKAGES = {"pywin32": "win32com.client", "beautifulsoup4": "bs4", "python-docx": "docx", "Pillow": "PIL.Image"}
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MAX_FILE = 100 * 1024 * 1024
@@ -37,12 +37,17 @@ UPDATE_REPO = "wiwiwiwiwii/dwss-official-account"
 UPDATE_API = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
 UPDATE_PAGE = f"https://github.com/{UPDATE_REPO}/releases/latest"
 VERSION_RE = re.compile(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?")
+PRERELEASE_RE = re.compile(r"alpha|beta|rc", re.IGNORECASE)
 
 
 def version_tuple(text):
-    """取版本号里的数字段：`v0.13.0 beta` → (0, 13, 0)。取不到返回 None。"""
-    found = VERSION_RE.search(str(text or ""))
-    return tuple(int(part or 0) for part in found.groups()) if found else None
+    """取版本号的可比较形态：`v0.13.0 beta` → (0, 13, 0, 0)，`v0.13.0` → (0, 13, 0, 1)。
+    末位是“正式版”标记：同号正式版排在 beta 之后，beta 用户才会收到正式版提示。取不到返回 None。"""
+    text = str(text or "")
+    found = VERSION_RE.search(text)
+    if not found:
+        return None
+    return tuple(int(part or 0) for part in found.groups()) + (0 if PRERELEASE_RE.search(text) else 1,)
 
 
 def fetch_latest_release(timeout=3):
@@ -684,6 +689,7 @@ class Workbench:
                         item.update(state="done", html=html, title=title, main_title=main_title, subtitle=subtitle, title_type=title_type,
                                     self_check=metadata.get("self_check", ""), self_check_hint=metadata.get("self_check_hint", ""),
                                     forecast_stripped=bool(metadata.get("forecast_stripped")),
+                                    forecast_appended=bool(metadata.get("forecast_appended")),
                                     url="result/" + job["id"] + "/" + str(job["items"].index(item)))
                         if warnings:
                             item["warnings"] = warnings

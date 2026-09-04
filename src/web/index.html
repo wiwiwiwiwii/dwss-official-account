@@ -36,7 +36,7 @@ button{transition:background-color .16s ease,border-color .16s ease,box-shadow .
 <label class="mode"><input type="radio" name="preset" value="depth"><strong>深度</strong><span>摘要+目录+正文</span></label>
 <label class="mode"><input type="radio" name="preset" value="weekly"><strong>周报</strong><span>仅周报正文</span></label>
 </div>
-<label class="toc"><input type="checkbox" id="forecastTables" {{FORECAST_TABLES}}>保留文末盈利预测三表</label>
+<label class="toc" title="深度：保留正文末尾的三表区块；点评：把文末三表附在摘要之后"><input type="checkbox" id="forecastTables" {{FORECAST_TABLES}}>输出文末盈利预测三表</label>
 <details class="advanced"><summary>更多设置</summary>
 <div class="checks"><label><input type="checkbox" data-mode="summary">摘要</label><label><input type="checkbox" data-mode="body">正文</label><label><input type="checkbox" data-mode="weekly">周报</label></div>
 <label class="toc"><input type="checkbox" id="toc">保留内容目录图</label>
@@ -57,6 +57,7 @@ button{transition:background-color .16s ease,border-color .16s ease,box-shadow .
 <li>需要本机安装并可正常使用的 Microsoft Word 桌面版。</li>
 <li>匹配 2026 标准研报模板，正文标题须使用【正文】一级/二级/三级 Word 样式（手工输入的标题编号不识别）；模板更新或写作格式不标准时可能出错，发布前请在公众号编辑器中核对内容起止、文字、图表及来源。</li>
 <li>图表清晰度上限为 220 PPI 导出；大图或对清晰度要求较高的图请人工检查，转换无法提高源图清晰度。</li>
+<li>「输出文末盈利预测三表」默认不勾选：勾选后深度报告保留正文末尾的“XX三大财务预测表”区块，点评报告则把该区块附在摘要之后（多跑一遍正文转换，耗时相应增加）。</li>
 <li>单批最多 30 份，单份最多 100 MB。</li>
 <li>启动时向 GitHub 查一次有无新版本，只发版本号、不含任何文档内容；有新版时左上角出现下载链接，失败或已是最新都不提示。</li>
 </ol></details></section>
