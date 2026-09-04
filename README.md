@@ -52,3 +52,7 @@ pwsh -NoLogo -NoProfile -File src/build.ps1 -InstallDependencies
 - 依赖标准研报模板的控件与正文标题样式；换模板需人工核对提取范围。
 - 源图本身模糊时转换无法恢复细节，发布前仍需核对公众号里的图表与排版。
 - 没有代码签名，首次运行 Windows SmartScreen 可能提示，选择「仍要运行」即可。
+
+## 许可
+
+[MIT](LICENSE)
