@@ -1,0 +1,130 @@
+{
+  "output": {
+    "line_height": 2,
+    "paragraph_text_align": "left",
+    "generate_docx": false,
+    "figure_caption_font_size_px": 14,
+    "figure_source_font_size_px": 13,
+    "figure_source_text_color": "#888888",
+    "figure_caption_margin_top_em": 0.55,
+    "figure_caption_margin_bottom_em": 0.22,
+    "figure_caption_margin_right_css": "0",
+    "figure_caption_margin_left_css": "0",
+    "figure_caption_text_indent_css": "0",
+    "figure_caption_text_align": "left",
+    "figure_caption_line_height": 1.6,
+    "figure_source_margin_top_em": 0.18,
+    "figure_source_margin_bottom_em": 1.2,
+    "figure_source_margin_right_css": "0",
+    "figure_source_margin_left_css": "0",
+    "figure_source_text_indent_css": "0",
+    "figure_source_text_align": "left",
+    "figure_source_line_height": 1.6,
+    "image_margin_css": "0 auto",
+    "image_border_css": "0",
+    "figure_image_container_margin_css": "0",
+    "figure_image_container_text_indent_css": "0",
+    "figure_image_container_text_align": "center",
+    "figure_image_container_line_height": 1,
+    "summary_section_margin_css": "0 0 0.6em 0",
+    "toc_image_margin_css": "0.6em 0 1.0em 0",
+    "toc_image_text_indent_css": "0",
+    "toc_image_text_align": "center",
+    "toc_image_line_height": 1,
+    "heading_font_family": "Microsoft YaHei, sans-serif",
+    "heading_level_1_font_size_px": 17,
+    "heading_level_2_font_size_px": 14,
+    "heading_level_3_font_size_px": 14,
+    "heading_level_1_text_color": "#D97A45",
+    "heading_level_1_bracket_color": "#5F8FE8",
+    "heading_level_23_background_color": "#76A2E9",
+    "heading_level_23_text_color": "#FFFFFF",
+    "heading_margin_top_em": 1.15,
+    "heading_margin_bottom_em": 0.55,
+    "heading_margin_horizontal_css": "0",
+    "heading_inline_padding_vertical_em": 0.22,
+    "heading_inline_padding_horizontal_em": 0.55,
+    "heading_border_radius_px": 8,
+    "heading_level_1_border_px": 6,
+    "heading_text_indent_css": "0",
+    "heading_level_1_text_align": "center",
+    "heading_level_23_text_align": "left",
+    "heading_level_1_font_weight": 700,
+    "heading_level_23_font_weight": 700,
+    "heading_level_1_border_style": "solid",
+    "heading_level_1_background_color": "#ffffff",
+    "heading_level_1_gap_horizontal_px": 8,
+    "heading_level_1_gap_border_extra_px": 2,
+    "heading_level_1_line_height": 1.6,
+    "heading_spacer_margin_css": "0",
+    "heading_spacer_text_indent_css": "0",
+    "heading_spacer_text_align": "left",
+    "list_item_margin_vertical_em": 0.2,
+    "list_item_margin_horizontal_css": "0",
+    "list_text_align": "left",
+    "list_margin_top_css": "0",
+    "list_margin_right_css": "0",
+    "list_margin_left_em": 1.4,
+    "list_padding_left_em": 1.2,
+    "table_fallback_text_indent_css": "0",
+    "generate_images": true,
+    "image_pixels_per_inch": 220,
+    "heading_level_23_line_height": 1.5,
+    "figure_caption_text_color": "#17365d",
+    "heading_level_1_margin_bottom_em": 0.0
+  },
+  "document": {
+    "start_mode": "first_main_heading",
+    "stop_at_patterns": [
+      "免责声明",
+      "免责及评级说明",
+      "评级说明",
+      "投资评级标准"
+    ],
+    "drop_title_patterns": [
+      "内容目录",
+      "图表目录"
+    ],
+    "drop_exact_or_contains_patterns": [
+      "请务必阅读正文之后的免责声明部分"
+    ],
+    "remove_toc": true,
+    "remove_images": false,
+    "remove_tables": true,
+    "table_to_text": false,
+    "render_tables": true,
+    "heading_as_bold_paragraph": true,
+    "use_custom_heading_blocks": true,
+    "use_heading_style_names_only": true
+  },
+  "matching": {
+    "main_heading_regex": "^\\s*\\d+\\.\\s*\\S+",
+    "heading_like_regex": "^\\s*(?:\\d+(?:\\.\\d+)*[\\.]?|[ivxlcdmIVXLCDM]+\\.)\\s*\\S+",
+    "caption_regex": "^\\s*(?:\\u56fe|\\u8868)\\s*\\d+\\s*[\\uff1a:]",
+    "source_regex": "^\\s*(?:\\u6570\\u636e\\u6765\\u6e90|\\u8d44\\u6599\\u6765\\u6e90|\\u8d44\\u6599\\u53ca\\u6570\\u636e\\u6765\\u6e90|[Ss]ources?)\\s*[\\uff1a:]",
+    "toc_entry_regex": "\\.{3}\\s*\\d+\\s*$",
+    "heading_level_1_regex": "^\\s*\\d+\\.\\s+\\S+",
+    "heading_level_2_regex": "^\\s*\\d+\\.\\d+\\.\\s+\\S+",
+    "heading_level_3_regex": "^\\s*\\d+\\.\\d+\\.\\d+\\.\\s+\\S+",
+    "heading_level_1_style_names": [
+      "【正文】一级标题"
+    ],
+    "heading_level_2_style_names": [
+      "【正文】二级标题"
+    ],
+    "heading_level_3_style_names": [
+      "【正文】三级标题"
+    ]
+  },
+  "front_matter": {
+    "enable": true,
+    "include_summary": true,
+    "include_toc_image": true,
+    "toc_image": {
+      "title": "目录",
+      "show_title_bar": true,
+      "show_page_numbers": true,
+      "max_levels": 3
+    }
+  }
+}

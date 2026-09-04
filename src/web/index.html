@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>报告转公众号 · 本地工作台</title>
+<link rel="icon" href="app-icon.ico">
+<style>
+:root{color-scheme:light;--ink:#203c35;--muted:#6c7c75;--line:#dce5df;--paper:#fff;--green:#266550;--pale:#edf4ee;--red:#a93c34}*{box-sizing:border-box}body{margin:0;background:#f4f6f1;color:var(--ink);font:15px/1.65 "Microsoft YaHei","PingFang SC",sans-serif}button,input{font:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.48}button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #b3c8a5;outline-offset:3px}button{border:1px solid var(--line);border-radius:9px;background:white;color:var(--ink);padding:9px 16px}button:hover:not(:disabled){border-color:#89a893;background:#f4f8f3}.primary{background:var(--green);border-color:var(--green);color:white}.primary:hover:not(:disabled){background:#1b513f;color:white}.small{font-size:13px;padding:5px 11px}.quiet{background:transparent}.shell{max-width:880px;margin:auto;padding:30px 36px 44px}header{display:flex;justify-content:space-between;align-items:center;gap:20px;padding-bottom:25px;border-bottom:1px solid var(--line)}.brand{display:flex;align-items:center;gap:12px}.mark{width:39px;height:39px;background:var(--green);border-radius:11px;color:white;display:grid;place-items:center;font-size:22px;font-weight:600}.brand strong{font-size:17px;letter-spacing:.5px}.brand small{display:block;color:var(--muted);font-size:11px;letter-spacing:1.4px}.header-actions{display:flex;align-items:center;gap:15px}.intro{padding:22px 0}.intro p{margin:0;color:var(--muted)}.card{background:var(--paper);border:1px solid var(--line);border-radius:16px;padding:25px;margin-bottom:20px}.step-title{display:flex;align-items:center;gap:10px;margin-bottom:17px}h2{font-size:16px;margin:0;font-weight:600}.step{display:grid;place-items:center;width:25px;height:25px;background:var(--pale);border-radius:7px;color:#5c7868;font-size:12px}.step-title .sub{margin-left:auto;color:var(--muted);font-size:12px}.drop{background:#f7faf6;border:1px dashed #a8beb0;border-radius:12px;padding:27px 18px;text-align:center;transition:.15s}.drop.drag{background:#e5f1e5;border-color:var(--green);box-shadow:0 0 0 3px #eaf1e7}.file-icon{width:34px;height:40px;margin:0 auto 10px;border:1.5px solid #7f9b89;border-radius:5px;position:relative}.file-icon:after{content:"";position:absolute;left:8px;right:8px;top:13px;height:9px;border-top:1px solid #7f9b89;border-bottom:1px solid #7f9b89}.drop p{margin:0 0 4px}.hint{font-size:12px;color:var(--muted)}.drop button{margin-top:12px}.path-entry{display:flex;gap:8px;margin-top:13px}.path-entry button{flex:none;white-space:nowrap}input[type=text]{min-width:0;flex:1;width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:#fff;color:var(--ink);font-size:13px}input[type=text]:disabled{opacity:.48;background:#f6f8f4}.files{padding:0;margin:15px 0 0;list-style:none;max-height:235px;overflow:auto}.files li{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid #edf0eb}.file-label{min-width:0;flex:1}.file-label strong{display:block;font-size:13px;font-weight:500;overflow-wrap:anywhere}.file-label small{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.remove{padding:3px 9px;border:0;color:var(--muted);font-size:18px}.error{color:var(--red);font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}.hidden{display:none!important}.mode-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.mode{position:relative;display:block;text-align:left;padding:15px 13px;background:white;border:1px solid var(--line);border-radius:10px;cursor:pointer}.mode.selected{border-color:var(--green);background:#f0f6ee;box-shadow:inset 0 0 0 1px var(--green)}.mode input{position:absolute;right:10px;top:10px;accent-color:var(--green)}.mode strong{display:block;font-size:14px;padding-right:13px;font-weight:500}.mode span{display:block;color:var(--muted);font-size:11px;margin-top:5px}.advanced{margin-top:17px;border-top:1px solid #eef1ed;padding:16px 0;font-size:13px}.advanced summary{cursor:pointer;color:#577364}.checks{display:flex;flex-wrap:wrap;gap:14px;margin:12px 0}.checks label,.toc{display:flex;align-items:center;gap:6px;font-size:13px}.checks input,.toc input{accent-color:var(--green)}.toc{margin-top:15px}.action-card{display:flex;flex-direction:column;align-items:stretch;gap:5px;margin-bottom:20px}.action-card p{margin:0;font-size:12px;color:var(--muted);text-align:center}.recover-line{display:flex;justify-content:flex-end;gap:8px;font-size:12px}.recover-line:not(:has(:not(.hidden))){display:none}.action-card #jobError:empty{display:none}#convert{width:100%;padding:15px 23px;white-space:nowrap}.env-strip{padding:14px 20px}.env-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.env-summary{font-size:13px;display:flex;align-items:center;gap:8px}.env-summary:before{content:"";flex:none;width:7px;height:7px;border-radius:50%;background:#b3bdb6}.env-summary.ok:before{background:#5b956f}.env-summary.missing:before{background:#c58c54}.env-summary.unknown:before{background:#9aa79c}.env-buttons{display:flex;gap:7px}.dependency{display:flex;gap:8px;margin:15px 0 0;font-size:12px}.dependency .dot{flex:none;width:7px;height:7px;margin-top:7px;border-radius:50%;background:#b3bdb6}.dependency.missing .dot{background:#c58c54}.dependency strong{display:block;font-size:13px;font-weight:500}.dependency small{display:block;color:var(--muted);font-size:11px;overflow-wrap:anywhere}.guide{font-size:12px;color:var(--muted)}.guide p{margin:12px 0 0}a{color:var(--green);text-decoration:underline;text-underline-offset:3px}.log{max-height:155px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f8f4;padding:11px;border-radius:8px;font:11px/1.7 Consolas,"Microsoft YaHei",monospace}footer{font-size:11px;color:#8a978c;padding-top:8px;text-align:center}.stopped{border-color:#bdcec0}@media(max-width:850px){.shell{padding:22px}.intro{padding-top:22px}}@media(max-width:560px){.mode-grid{grid-template-columns:repeat(2,1fr)}.shell{padding:18px 14px}.header-actions{gap:7px}.card{padding:18px}.mode-grid{gap:6px}.mode{padding:15px 9px}.mode span{font-size:10px}.step-title .sub{font-size:10px}.path-entry button{padding:9px}.intro p{font-size:13px}}
+.dependency.ok .dot{background:transparent;width:12px;height:12px;margin-top:3px}.dependency.ok .dot:after{content:'✓';color:#438061;font-size:14px;font-weight:bold}
+.dependency.unknown .dot{background:transparent;width:12px;height:12px;margin-top:3px}.dependency.unknown .dot:after{content:'?';color:#9aa79c;font-size:13px;font-weight:bold}.dependency.unknown strong{color:var(--muted)}
+.install-progress{margin-top:16px;font-size:12px}.install-steps{display:flex;gap:15px;margin-bottom:8px;color:var(--muted)}.install-steps .current{color:var(--green);font-weight:600}.install-steps .complete{color:var(--green)}.install-progress progress{display:block;width:100%;height:8px;accent-color:var(--green);margin:10px 0}.spinner{display:inline-block;width:12px;height:12px;margin-right:7px;border:2px solid #d8e5dc;border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px}@keyframes spin{to{transform:rotate(360deg)}}
+button{transition:background-color .16s ease,border-color .16s ease,box-shadow .16s ease}button:hover:not(:disabled){box-shadow:0 2px 5px #203c350d}@media(prefers-reduced-motion:reduce){button{transition:none}.spinner{animation-duration:1.6s}}
+.program-credit{display:flex;align-items:baseline;justify-content:center;flex-wrap:wrap;font-family:inherit;color:rgba(35,39,42,.55);font-weight:400}.program-credit>span{white-space:nowrap}.program-credit .kirito{margin:0 .55em;color:#202225;font-size:1.08em;font-weight:600;font-style:normal;letter-spacing:.28em;line-height:1}
+.mode{transition:background-color .16s ease,border-color .16s ease,box-shadow .16s ease}.mode:hover:has(input:not(:disabled)){background:#f4f8f3;border-color:#89a893;box-shadow:0 2px 5px #203c350d}.mode.selected:hover:has(input:not(:disabled)){background:#e5f0e1;border-color:var(--green);box-shadow:inset 0 0 0 1px var(--green),0 2px 5px #203c350d}@media(prefers-reduced-motion:reduce){.mode{transition:none}}
+.title-example{margin-top:12px;padding:12px 14px;border:1px solid var(--line);border-radius:9px;background:#f7faf6;color:var(--ink);font-size:13px;line-height:1.8;overflow-wrap:anywhere}.example-label{font-weight:500;margin-bottom:5px}
+</style>
+</head>
+<body>
+<div class="shell">
+<header><div class="brand"><div class="mark" aria-hidden="true">文</div><div><strong>报告转公众号</strong> <span id="version" style="display:inline-block;margin-left:6px;font-size:11px;color:var(--muted);white-space:nowrap">{{APP_VERSION}}</span><a id="update" class="hidden" target="_blank" rel="noopener noreferrer" style="display:none;margin-left:6px;padding:1px 7px;border:1px solid var(--green);border-radius:9px;font-size:11px;color:var(--green);text-decoration:none;white-space:nowrap"></a><small>WORD TO WECHAT</small></div></div><div class="header-actions"><a id="lastJobTop" class="small primary hidden" style="display:inline-block;text-decoration:none;border:1px solid var(--green);border-radius:9px"></a><button id="shutdown" class="quiet small">关闭工作台</button></div></header>
+<section class="intro"><p>导入 Word 报告，选择提取方式，生成后本页跳转到结果页预览并复制。</p></section>
+<div id="stopped" class="card stopped hidden" role="status">工作台已关闭，本次临时结果将被清理。再次使用时，请重新运行启动程序。</div>
+<main id="workspace">
+<div class="card env-strip"><div class="env-head"><span id="envSummary" class="env-summary">正在检查运行环境…</span><span class="env-buttons"><button id="refresh" class="small quiet">重新检查</button><button id="install" class="small hidden">安装缺失依赖</button></span></div><div id="dependencies" class="hidden"></div><div id="dependencyError" class="error" role="alert"></div><div id="installProgress" class="install-progress hidden" role="status" aria-live="polite"><div class="install-steps"><span id="downloadStep">1 下载依赖</span><span id="installStep">2 安装依赖</span></div><progress id="downloadProgress" aria-label="正在下载依赖"></progress><div><span id="installSpinner" class="spinner" aria-hidden="true"></span><span id="installPhase"></span></div></div><details id="installDetails" class="hidden"><summary class="hint">安装详情</summary><pre id="installLog" class="log hidden"></pre></details></div>
+<section class="card"><div class="step-title"><span class="step">01</span><h2>添加报告</h2><span class="sub">支持 .doc / .docx，可批量添加</span></div>
+<div class="drop" id="drop"><div class="file-icon" aria-hidden="true"></div><p>将报告拖到这里</p><div class="hint">文件仅在本地处理，不会上传云端</div><button id="choose" class="small">选择文件</button><input id="picker" type="file" accept=".doc,.docx" multiple hidden></div>
+<div class="path-entry"><textarea id="path" rows="2" aria-label="Windows 文件路径" placeholder="或粘贴文件路径，支持带引号路径；多份文件每行一条" style="width:100%;min-width:0;resize:vertical;border:1px solid #dce5df;border-radius:9px;padding:10px 12px;font:13px/1.6 Microsoft YaHei,sans-serif"></textarea><button id="addPath">添加路径</button></div>
+<ul class="files" id="files" aria-label="已添加报告"></ul><div id="inputError" class="error" role="alert"></div>
+<p id="selection" class="hint" style="margin:6px 0 0">尚未添加报告</p>
+</section>
+<section class="card"><div class="step-title"><span class="step">02</span><h2>选择报告类型</h2><span class="sub" id="modeLabel">自动识别报告类型</span></div>
+<div class="mode-grid">
+<label class="mode selected"><input type="radio" name="preset" value="auto" checked><strong>自动</strong><span>识别报告类型</span></label>
+<label class="mode"><input type="radio" name="preset" value="summary"><strong>点评</strong><span>仅提取报告摘要</span></label>
+<label class="mode"><input type="radio" name="preset" value="depth"><strong>深度</strong><span>摘要+目录+正文</span></label>
+<label class="mode"><input type="radio" name="preset" value="weekly"><strong>周报</strong><span>仅周报正文</span></label>
+</div>
+<label class="toc"><input type="checkbox" id="forecastTables" {{FORECAST_TABLES}}>保留文末盈利预测三表</label>
+<details class="advanced"><summary>更多设置</summary>
+<div class="checks"><label><input type="checkbox" data-mode="summary">摘要</label><label><input type="checkbox" data-mode="body">正文</label><label><input type="checkbox" data-mode="weekly">周报</label></div>
+<label class="toc"><input type="checkbox" id="toc">保留内容目录图</label>
+<label style="display:block;margin-top:14px">标题样式 <select id="titleStyle" style="margin-left:8px;padding:6px 10px;border:1px solid #dce5df;border-radius:7px;background:white;color:#203c35"><option value="自动">跟随识别结果</option><option value="点评">点评标题</option><option value="深度">深度标题</option><option value="周报">周报标题</option></select></label>
+<label style="display:flex;align-items:center;gap:12px;margin-top:12px">标题前缀 <input id="titlePrefix" type="text" value="{{TITLE_PREFIX}}" maxlength="100" style="max-width:230px" autocomplete="off"></label>
+<div class="checks" style="margin:14px 0 0;align-items:center">
+<label><input type="checkbox" id="titleSubtitle" {{TITLE_INCLUDE_SUBTITLE}}>副标题</label>
+<label style="gap:8px">副标题分隔符 <input id="subtitleSep" type="text" value="{{TITLE_SUBTITLE_SEP}}" maxlength="10" style="max-width:64px;padding:6px 8px" autocomplete="off"></label>
+<label><input type="checkbox" id="titleType" {{TITLE_INCLUDE_TYPE}}>报告类型</label>
+<label style="gap:8px">类型分隔符 <input id="typeSep" type="text" value="{{TITLE_TYPE_SEP}}" maxlength="10" style="max-width:64px;padding:6px 8px" autocomplete="off"></label>
+</div>
+<div class="title-example"><div class="example-label">效果示例：</div><div id="titleExample">{{TITLE_PREFIX}}[副标题] | [报告类型]：[报告标题]</div></div>
+</details>
+</section>
+<section class="action-card" aria-live="polite"><button id="convert" class="primary" disabled>生成微信文章 ↗</button><div id="jobError" class="error" role="alert"></div><p class="recover-line"><span id="progressTitle" class="hidden"></span><a id="lastJob" class="hidden"></a></p></section>
+<section class="card guide"><details><summary style="cursor:pointer;color:#577364;text-decoration:underline;text-underline-offset:3px">说明</summary>
+<ol style="margin:12px 0 0;padding-left:20px;line-height:2">
+<li>需要本机安装并可正常使用的 Microsoft Word 桌面版。</li>
+<li>匹配 2026 标准研报模板，正文标题须使用【正文】一级/二级/三级 Word 样式（手工输入的标题编号不识别）；模板更新或写作格式不标准时可能出错，发布前请在公众号编辑器中核对内容起止、文字、图表及来源。</li>
+<li>图表清晰度上限为 220 PPI 导出；大图或对清晰度要求较高的图请人工检查，转换无法提高源图清晰度。</li>
+<li>单批最多 30 份，单份最多 100 MB。</li>
+<li>启动时向 GitHub 查一次有无新版本，只发版本号、不含任何文档内容；有新版时左上角出现下载链接，失败或已是最新都不提示。</li>
+</ol></details></section>
+</main><footer class="program-credit"><span>Programmed by</span> <span class="kirito">KIRITO</span> <span>with Fable 5</span></footer>
+</div>
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const inputs = [];
+  let active = false, stopped = false, ready = false, installRunning = false, statusTimer, reportType = '自动', tocEnabled = true, titleStyleManual = false, manualErrorUntil = 0;
+  const client = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+  const autoPreset = () => document.querySelector('[name=preset][value=auto]').checked;
+  const modes = () => autoPreset() ? ['auto'] : [...document.querySelectorAll('[data-mode]:checked')].map(el => el.dataset.mode);
+  const message = (id, text) => { $(id).textContent = text || ''; };
+  async function api(path, options = {}) {
+    const response = await fetch(new URL(path, location.href), {cache:'no-store', ...options});
+    const raw = await response.text();
+    let data;
+    try { data = raw ? JSON.parse(raw) : {}; } catch { throw new Error(`服务返回了无法识别的响应（${response.status}）`); }
+    if (!response.ok) throw new Error(data.error || `请求失败（${response.status}）`);
+    return data;
+  }
+  const post = (path, data) => api(path, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+  function controls() {
+    $('convert').disabled = stopped || active || !ready || !inputs.length || !modes().length || installRunning;
+    $('selection').textContent = inputs.length ? `已添加 ${inputs.length} 份报告${!ready ? ' · 请先完成环境检查' : ''}` : '尚未添加报告';
+    $('convert').textContent = active ? '正在处理…' : '生成微信文章 ↗';
+    for (const el of document.querySelectorAll('#choose,#picker,#addPath,#path,[name=preset],[data-mode],#titleStyle,#titlePrefix,#forecastTables,#titleSubtitle,#titleType,.remove')) el.disabled = active || stopped;
+    $('toc').disabled = active || stopped;
+    $('toc').checked = !active && !stopped && tocEnabled;
+    renderTitleExample();
+  }
+  function renderFiles() {
+    $('files').replaceChildren();
+    inputs.forEach((item, index) => {
+      const li = document.createElement('li'), label = document.createElement('div'), name = document.createElement('strong'), detail = document.createElement('small'), remove = document.createElement('button');
+      label.className = 'file-label'; name.textContent = item.name;
+      detail.textContent = item.path || `${(item.file.size / 1024).toFixed(0)} KB · 本机文件`;
+      remove.className = 'remove'; remove.textContent = '×'; remove.setAttribute('aria-label',`移除 ${item.name}`);
+      remove.addEventListener('click',() => { inputs.splice(index,1); renderFiles(); });
+      label.append(name,detail); li.append(label,remove); $('files').append(li);
+    });
+    controls();
+  }
+  function addFiles(files) {
+    if (active || stopped) return;
+    const rejected = [];
+    for (const file of files) {
+      if (!/\.(doc|docx)$/i.test(file.name) || file.name.startsWith('~$') || file.size > 100*1024*1024 || inputs.length >= 30) { rejected.push(file.name); continue; }
+      if (!inputs.some(item => item.file && item.file.name === file.name && item.file.size === file.size && item.file.lastModified === file.lastModified)) inputs.push({name:file.name,file});
+    }
+    message('inputError',rejected.length ? `未添加以下文件（仅限 Word 正式文件，每份最多 100 MB，每批最多 30 份）：${rejected.join('、')}` : ''); renderFiles();
+  }
+  $('choose').onclick = () => $('picker').click();
+  $('picker').onchange = () => { addFiles($('picker').files); $('picker').value = ''; };
+  for (const event of ['dragenter','dragover']) $('drop').addEventListener(event,e => {e.preventDefault(); if (!active) $('drop').classList.add('drag');});
+  $('drop').addEventListener('dragleave',() => $('drop').classList.remove('drag'));
+  $('drop').addEventListener('drop',e => {e.preventDefault(); $('drop').classList.remove('drag'); addFiles(e.dataTransfer.files);});
+  document.addEventListener('dragover',e => e.preventDefault());
+  document.addEventListener('drop',e => e.preventDefault());
+  function addPath() {
+    const paths = $('path').value.split(/\r?\n/).map(line => line.trim().replace(/^"(.*)"$/,'$1')).filter(Boolean);
+    const rejected = [];
+    for (const path of paths) {
+      if (!/^(?:[a-z]:[\\/]|\\\\)/i.test(path) || !/\.(doc|docx)$/i.test(path) || path.split(/[\\/]/).pop().startsWith('~$') || inputs.length >= 30) {rejected.push(path);continue;}
+      if (!inputs.some(item => item.path && item.path.toLowerCase() === path.toLowerCase())) inputs.push({path,name:path.split(/[\\/]/).pop()});
+    }
+    $('path').value = rejected.join('\n'); message('inputError',rejected.length?'部分路径未添加，请检查是否是完整 Word 文件路径，以及是否超过每批 30 份。':''); renderFiles();
+  }
+  $('addPath').onclick = addPath;
+  $('path').onkeydown = e => {if (e.key === 'Enter' && !e.shiftKey) {e.preventDefault();addPath();}};
+  function updateModes(preset = '') {
+    document.querySelectorAll('[name=preset]').forEach(el => {el.checked = el.value === preset; el.closest('.mode').classList.toggle('selected',el.checked);});
+    const selected = modes(), names = {summary:'摘要',body:'正文',weekly:'周报'};
+    message('modeLabel',selected[0] === 'auto' ? '自动识别报告类型' : selected.length ? `提取${selected.map(mode => names[mode]).join(' + ')}` : '请至少选择一种提取模式'); controls();
+  }
+  document.querySelectorAll('[name=preset]').forEach(el => el.onchange = () => {const auto = el.value === 'auto'; const selected = auto ? [] : el.value === 'depth' ? ['summary','body'] : [el.value]; reportType = auto ? '自动' : {summary:'点评',depth:'深度',weekly:'周报'}[el.value]; tocEnabled = auto || el.value === 'depth'; titleStyleManual = false; $('titleStyle').value=reportType; document.querySelectorAll('[data-mode]').forEach(box => box.checked = selected.includes(box.dataset.mode)); updateModes(el.value);});
+  $('titleStyle').onchange = () => {titleStyleManual = true;};
+  $('toc').onchange = () => {tocEnabled=$('toc').checked;};
+  function renderTitleExample() {
+    $('subtitleSep').disabled = !$('titleSubtitle').checked || active || stopped;
+    $('typeSep').disabled = !$('titleType').checked || active || stopped;
+    const sub = $('titleSubtitle').checked ? '[副标题]' + $('subtitleSep').value : '';
+    const typ = $('titleType').checked ? '[报告类型]' + $('typeSep').value : '';
+    message('titleExample',$('titlePrefix').value.trim() + sub + typ + '[报告标题]');
+  }
+  for (const id of ['titlePrefix','subtitleSep','typeSep']) $(id).oninput = renderTitleExample;
+  for (const id of ['titleSubtitle','titleType']) $(id).onchange = renderTitleExample;
+  document.querySelectorAll('[data-mode]').forEach(el => el.onchange = () => {if (el.checked && ['body','weekly'].includes(el.dataset.mode)) document.querySelector(`[data-mode="${el.dataset.mode === 'body' ? 'weekly' : 'body'}"]`).checked = false; updateModes(); const picked = modes(); reportType = picked.includes('weekly') ? '周报' : picked.includes('body') ? '深度' : '点评'; if (!titleStyleManual) $('titleStyle').value = reportType;});
+  function setProgress(text) {const el = $('progressTitle'); el.textContent = text || ''; el.classList.toggle('hidden',!text);}
+  function showLog(id, value) {const text = Array.isArray(value) ? value.join('\n') : String(value || ''); message(id,text); $(id).classList.toggle('hidden',!text); $(id).scrollTop = $(id).scrollHeight;}
+  function showInstall(install = {}) {
+    const running = install.state === 'running', phase = install.phase || 'preparing';
+    $('installProgress').classList.toggle('hidden',!running && install.state !== 'done');
+    $('downloadStep').className = phase === 'downloading' ? 'current' : ['installing','done'].includes(phase) ? 'complete' : '';
+    $('installStep').className = phase === 'installing' ? 'current' : phase === 'done' ? 'complete' : '';
+    $('downloadProgress').classList.toggle('hidden',phase !== 'downloading' || !running);
+    $('installSpinner').classList.toggle('hidden',!running || phase === 'downloading');
+    message('installPhase',({'preparing':'正在准备…','downloading':'正在下载依赖','installing':'正在安装依赖…','done':'✓ 依赖已就绪','error':'安装失败'}[phase] || '正在准备…') + (phase === 'downloading' && install.source ? ' · ' + install.source : ''));
+    $('installDetails').classList.toggle('hidden',!install.log);
+    if(install.state === 'error') $('installDetails').open = true;
+  }
+  let lastDependencies = [];
+  function renderDependencies(list, unknown) {
+    $('dependencies').replaceChildren();
+    const summary = $('envSummary');
+    if (!list.length) {summary.textContent = unknown ? '运行环境状态未知，请重新检查' : '正在检查运行环境…'; summary.className = 'env-summary' + (unknown ? ' unknown' : ''); $('dependencies').classList.add('hidden'); return;}
+    const allOk = !unknown && list.every(item => item.ok);
+    summary.textContent = unknown ? '运行环境待检测，请重新检查' : allOk ? (list.length === 1 ? `${list[0].name} · 就绪` : `运行环境 ${list.length} 项 · 全部就绪`) : '运行环境未就绪';
+    summary.className = `env-summary ${unknown ? 'unknown' : allOk ? 'ok' : 'missing'}`;
+    // 打包版正常时只有汇总一行；源码运行（多项）或任何异常时展开明细
+    const detail = unknown || !allOk || list.length > 1;
+    $('dependencies').classList.toggle('hidden', !detail);
+    if (!detail) return;
+    list.forEach(item => {const row = document.createElement('div'), dot = document.createElement('span'), text = document.createElement('div'), name = document.createElement('strong'); row.className = `dependency ${unknown ? 'unknown' : item.ok ? 'ok' : 'missing'}`; dot.className = 'dot'; name.textContent = `${item.name} · ${unknown ? '待检测' : item.ok ? '就绪' : '未就绪'}`; text.append(name); if(!unknown && !item.ok && item.detail){const detail=document.createElement('small');detail.textContent=item.detail;text.append(detail);} row.append(dot,text); $('dependencies').append(row);});
+  }
+  let statusSeq = 0, statusFails = 0;
+  async function checkStatus() {
+    if (stopped) return;
+    clearTimeout(statusTimer);
+    const seq = ++statusSeq;
+    try {
+      const data = await api('api/status');
+      if (stopped) return;   // 关闭期间发出的请求迟到返回：不得把已失效的恢复入口写回来
+      // 导航或 bfcache 恢复会并发出多个状态请求：迟到的旧响应不得覆盖新的状态与计时器
+      if (seq !== statusSeq) return;
+      statusFails = 0;
+      const dependencies = data.dependencies || [];
+      ready = dependencies.length > 0 && dependencies.every(item => item.ok);
+      lastDependencies = dependencies;
+      renderDependencies(dependencies);
+      installRunning = data.install?.state === 'running';
+      $('install').classList.toggle('hidden',!dependencies.some(item => !item.ok && item.installable) && !installRunning);
+      $('install').disabled = installRunning || active;
+      $('install').textContent = installRunning ? '正在安装…' : '安装缺失依赖';
+      showLog('installLog',data.install?.log);
+      showInstall(data.install);
+      const installError = data.install?.state === 'error' ? '依赖安装失败，请查看日志后重试。' : '';
+      if (installError || Date.now() > manualErrorUntil) message('dependencyError',installError);
+      if (data.busy && !active && !installRunning) message('dependencyError','另一个任务正在运行，请等待完成后再生成。');
+      if (data.busy) ready = false;
+      const last = data.last_job;
+      if (last && !active) {
+        const href = new URL(`job/${encodeURIComponent(last.id)}`,location.href).href, text = last.state === 'done' ? '返回结果页' : '查看转换进度';
+        for (const link of [$('lastJob'),$('lastJobTop')]) {link.href = href; link.textContent = text; link.classList.remove('hidden');}
+        setProgress('');
+      } else if (!active) {$('lastJob').classList.add('hidden'); $('lastJobTop').classList.add('hidden');}
+    } catch (error) {
+      if (stopped || seq !== statusSeq) return;
+      ready = false; renderDependencies(lastDependencies,true); $('install').classList.add('hidden');
+      // 环境状态已未知：同区域的“✓ 依赖已就绪”面板必须一起收起，不能与失败提示并存。
+      // 安装仍在进行时先留着——后台安装线程不会因为一次状态请求失败而停止；
+      // 但连续失败说明服务已经失联，再留着就是让用户干等一个再也确认不了的安装
+      statusFails += 1;
+      if (!installRunning || statusFails >= 3) {
+        installRunning = false; showInstall({}); $('installProgress').classList.add('hidden'); showLog('installLog','');
+      }
+      message('dependencyError',`环境检查失败：${error.message}`);}
+    controls();
+    if (!stopped) statusTimer = setTimeout(checkStatus,installRunning ? 1600 : 10000);
+  }
+  $('refresh').onclick = checkStatus;
+  $('install').onclick = async () => {
+    $('install').disabled = true; installRunning = true; controls(); message('dependencyError',''); showInstall({state:'running',phase:'preparing'});
+    try {await post('api/install',{}); await checkStatus();} catch (error) {installRunning = false;
+      // 安装根本没启动起来：立刻收起刚亮出来的“正在准备…”，不要和失败提示并存
+      showInstall({}); $('installProgress').classList.add('hidden');
+      message('dependencyError',`无法启动安装：${error.message}`); manualErrorUntil = Date.now() + 30000; $('install').disabled = false; controls();}
+  };
+  $('convert').onclick = async () => {
+    if ($('convert').disabled) return;
+    active = true; controls(); message('jobError',''); $('lastJob').classList.add('hidden'); $('lastJobTop').classList.add('hidden'); setProgress('正在准备文件…');
+    const prepared = [];
+    try {
+      for (let index = 0; index < inputs.length; index++) {
+        const item = inputs[index];
+        if (item.path) {prepared.push({path:item.path}); continue;}
+        setProgress(`正在读取 ${index + 1}/${inputs.length}：${item.name}`);
+        let uploaded;
+        try {uploaded = await api('api/upload',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Filename':encodeURIComponent(item.name)},body:item.file});} catch (error) {throw new Error(`文件“${item.name}”读取失败：${error.message}。本批次未提交，已选文件保留，请重试。`);}
+        prepared.push({upload:uploaded.id});
+      }
+      const job = await post('api/jobs',{inputs:prepared,modes:modes(),toc:tocEnabled,forecast_tables:$('forecastTables').checked,report_type:reportType,title_type:$('titleStyle').value,title_prefix:$('titlePrefix').value,
+        title_include_subtitle:$('titleSubtitle').checked,title_subtitle_sep:$('subtitleSep').value,title_include_type:$('titleType').checked,title_type_sep:$('typeSep').value});
+      setProgress('转换已开始，正在打开结果页…');
+      location.assign(new URL(`job/${encodeURIComponent(job.id)}`,location.href));
+    } catch (error) {
+      const uploaded = prepared.filter(item => item.upload).map(item => item.upload);
+      if (uploaded.length) post('api/discard',{uploads:uploaded}).catch(() => {});
+      active = false; setProgress(''); message('jobError',error.message); controls(); checkStatus();
+    }
+  };
+  $('shutdown').onclick = async () => {
+    if (!confirm('关闭工作台会停止本地服务并清理临时结果。请确认需要的文章已经复制。继续关闭？')) return;
+    $('shutdown').disabled = true;
+    try {await post('api/shutdown',{}); stopped = true; clearTimeout(statusTimer); clearInterval(heartbeat); $('workspace').classList.add('hidden'); $('lastJobTop').classList.add('hidden'); $('lastJobTop').removeAttribute('href'); $('stopped').classList.remove('hidden'); $('shutdown').textContent = '已关闭';} catch (error) {message('dependencyError',`关闭失败：${error.message}`); manualErrorUntil = Date.now() + 30000; $('shutdown').disabled = false;}
+  };
+  const beat = () => {if (!stopped) post('api/heartbeat',{client}).catch(() => {});};
+  const heartbeat = setInterval(beat,20000);
+  window.addEventListener('pagehide',() => {if (!stopped) navigator.sendBeacon(new URL('api/client-release',location.href),JSON.stringify({client}));});
+  // bfcache 恢复：先按“环境未知”收起生成按钮，等 api/status 回来再放开——
+  // 否则缓存里的 ready 会让按钮在恢复入口出现之前就可点，重复提交上一批文件
+  window.addEventListener('pageshow',e => {beat(); if (e.persisted) {active = false; ready = false; setProgress(''); message('jobError',''); controls(); checkStatus();}});
+  async function showUpdate() {
+    // 版本提示：后台已查到新版本时才出现；查不到、失败或已是最新都保持隐藏
+    try {
+      const data = await api('api/update');
+      if (!data || !data.version || !data.url) return;
+      const link = $('update');
+      link.textContent = '有新版本 ' + data.version + ' ↗';
+      link.href = data.url;
+      link.title = '打开下载页面';
+      link.classList.remove('hidden');
+      link.style.display = 'inline-block';
+    } catch { /* 版本提示是附带功能，任何失败都不打扰用户 */ }
+  }
+  controls(); beat(); checkStatus(); showUpdate();
+})();
+</script>
+</body>
+</html>

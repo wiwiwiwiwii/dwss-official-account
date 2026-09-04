@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+release/
+报告转公众号.exe
+.build-venv/
+build/
+dist/

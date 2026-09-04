@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<base href="__BASE__"><title>转换结果 · 报告转公众号</title>
+<link rel="icon" href="app-icon.ico">
+<style>
+:root{color-scheme:light;--ink:#203c35;--muted:#6c7c75;--line:#dce5df;--green:#266550}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#f4f6f1;color:var(--ink);font:15px/1.65 "Microsoft YaHei","PingFang SC",sans-serif;display:flex;flex-direction:column}
+header{width:100%;max-width:1040px;margin:0 auto;padding:30px 24px 25px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:20px}.brand{display:flex;align-items:center;gap:12px}.mark{width:39px;height:39px;background:var(--green);border-radius:11px;color:white;display:grid;place-items:center;font-size:22px;font-weight:600}.brand small{display:block;color:var(--muted);font-size:11px;letter-spacing:1.4px}.brand strong{font-size:17px;letter-spacing:.5px}
+button{font:inherit;border:1px solid var(--line);border-radius:9px;background:white;color:var(--ink);padding:9px 16px;cursor:pointer;transition:background-color .16s ease,border-color .16s ease,box-shadow .16s ease}button.primary{background:var(--green);border-color:var(--green);color:white}button:disabled{opacity:.48;cursor:not-allowed}button:hover:not(:disabled){background:#f4f8f3;border-color:#89a893;box-shadow:0 2px 5px #203c350d}button.primary:hover:not(:disabled){background:#1b513f;border-color:#1b513f}button:focus-visible,#report-title:focus-visible{outline:3px solid #b3c8a5;outline-offset:3px}button.quiet{background:transparent}
+#error-report{display:inline-block;margin-top:10px;font-size:13px;color:var(--green);text-decoration:underline;text-underline-offset:3px}
+main{width:100%;max-width:1040px;margin:0 auto;padding:24px;flex:1;display:flex;flex-direction:column;min-width:0}#files{display:flex;gap:8px;overflow-x:auto;padding:0 0 16px}#files[hidden]{display:none}#files button{flex:0 0 auto;max-width:280px;display:flex;align-items:center;gap:9px;text-align:left;white-space:normal;overflow-wrap:anywhere;line-height:1.6;font-size:13px}#files button.active{background:#f0f6ee;border-color:var(--green);box-shadow:inset 0 0 0 1px var(--green)}#files button.active:hover:not(:disabled){background:#e5f0e1}
+#files button.running{border-color:var(--green)}#files button.pending{background:#f3f5f2;border-color:#e4e9e3;color:#9aa79c}#files button.pending:hover:not(:disabled){background:#eef1ec}
+#files .st{flex:none;width:16px;height:16px;border-radius:50%;display:grid;place-items:center;font-size:10px;line-height:1}#files .st.done{background:var(--green);color:#fff}#files .st.pending{border:2px solid #b3bdb6}#files .st.failed{background:#b2433a;color:#fff;font-weight:700}#files .st.cancelled{border:2px solid #b3bdb6;color:#9aa79c;font-weight:700}
+#files .tab-label{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.preview{display:flex;flex-direction:column;min-width:0;flex:1}.canvas{flex:1;display:flex;flex-direction:column;min-width:0;border:1px solid var(--line);border-radius:16px;background:#fff;overflow:hidden}#message{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12.5px;line-height:1.7;margin:0;padding:7px 20px;border:none;border-bottom:1px solid #cfe5d3;text-align:center;color:#1b513f;background:#e6f2e8;max-height:150px;overflow:auto}#message.warn{color:#fff;background:#b2433a;border-color:#b2433a;font-weight:600}#message.info{color:var(--ink);background:#eef1ec;border-color:var(--line)}iframe{border:none;background:white;flex:1;width:100%;min-height:420px}#report-title{font:500 18px/1.7 "Microsoft YaHei","PingFang SC",sans-serif;color:var(--ink);display:block;width:100%;min-height:58px;padding:14px 18px;margin:0 0 16px;border:1px solid var(--line);border-radius:16px;text-align:center;resize:none;overflow:hidden;overflow-wrap:anywhere;background:#fff}
+.tools{display:flex;gap:10px;flex-wrap:wrap}#copy-status{font-size:12px;min-height:20px;padding-top:8px;color:#52725f}footer{text-align:center;color:#8a978c;font-size:11px;padding:16px 20px 22px}
+@media(max-width:700px){header{padding:18px;align-items:flex-start;flex-direction:column;gap:12px}main{padding:18px}#report-title{font-size:16px}iframe{min-height:60vh}.tools{gap:8px}button{padding:9px 12px}}@media(prefers-reduced-motion:reduce){button{transition:none}}
+.program-credit{display:flex;align-items:baseline;justify-content:center;flex-wrap:wrap;font-family:inherit;color:rgba(35,39,42,.55);font-weight:400}.program-credit>span{white-space:nowrap}.program-credit .kirito{margin:0 .55em;color:#202225;font-size:1.08em;font-weight:600;font-style:normal;letter-spacing:.28em;line-height:1}
+.page-title{font-size:18px;font-weight:600;line-height:1.5;margin:0 0 16px}
+[hidden]{display:none!important}
+#title-status{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:58px;padding:14px 18px;margin:0 0 16px;border:1px solid var(--line);border-radius:16px;background:#fff;color:var(--muted);font-size:16px;letter-spacing:.06em}#title-status.failed{color:#a93c34}
+.spinner{flex:none;width:14px;height:14px;border:2px solid #d8e5dc;border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.spinner{animation-duration:1.8s}}
+#console{margin:0;flex:1;width:100%;min-height:420px;overflow:auto;border:none;background:#fff;padding:18px 20px;font:14px/1.9 Consolas,"Microsoft YaHei",monospace;color:#5b6d64;white-space:pre-wrap;overflow-wrap:anywhere}
+</style>
+</head>
+<body>
+<header><div class="brand"><div class="mark" aria-hidden="true">文</div><div><strong>报告转公众号</strong> <span id="version" style="display:inline-block;margin-left:6px;font-size:11px;color:var(--muted);white-space:nowrap">{{APP_VERSION}}</span><a id="update" class="hidden" target="_blank" rel="noopener noreferrer" style="display:none;margin-left:6px;padding:1px 7px;border:1px solid var(--green);border-radius:9px;font-size:11px;color:var(--green);text-decoration:none;white-space:nowrap"></a><small>WORD TO WECHAT</small></div></div><div><div class="tools"><button id="home" class="quiet">返回主页</button><button id="cancel-job" hidden>取消转换</button><button id="copy-title" disabled>复制标题</button><button class="primary" id="copy" disabled>复制正文</button></div><div id="copy-status" role="status"></div></div></header>
+<main><h1 class="page-title">公众号内容预览</h1><nav id="files" aria-label="切换报告" hidden></nav><section class="preview"><div id="title-status" role="status"><span class="spinner" id="spinner" aria-hidden="true"></span><span id="title-status-text">格式转换中</span></div><textarea id="report-title" rows="1" aria-label="报告标题" placeholder="未识别标题，可在此输入" hidden disabled></textarea><div class="canvas"><div id="message" role="status" hidden></div><pre id="console" role="log" aria-label="转换运行状态"></pre><iframe id="preview" title="公众号正文" sandbox="allow-same-origin" hidden></iframe></div><a id="error-report" target="_blank" rel="noopener" hidden>查看错误报告（已脱敏，可转发开发者）</a></section></main>
+<footer class="program-credit"><span>Programmed by</span> <span class="kirito">KIRITO</span> <span>with Fable 5</span></footer>
+<script>
+const job='__JOB__', viewer=typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Math.random().toString(36).slice(2), frame=document.querySelector('#preview');
+const status=document.querySelector('#message'), copyStatus=document.querySelector('#copy-status');
+const consoleBox=document.querySelector('#console'), copyButton=document.querySelector('#copy');
+const titleStatus=document.querySelector('#title-status'), titleStatusText=document.querySelector('#title-status-text'), spinner=document.querySelector('#spinner');
+const stateWords={queued:'排队中',running:'格式转换中',error:'转换失败',cancelled:'已取消'};
+let selected=-1, items=[], loaded='';
+const titleDrafts=new Map(), titleInput=document.querySelector('#report-title'), titleButton=document.querySelector('#copy-title');
+function sizeTitle(){titleInput.style.height='auto';titleInput.style.height=(titleInput.scrollHeight+2)+'px';}
+new ResizeObserver(sizeTitle).observe(document.querySelector('.preview'));
+titleInput.addEventListener('input',()=>{titleDrafts.set(selected,titleInput.value);titleButton.disabled=!titleInput.value.trim();sizeTitle();});
+titleButton.onclick=async()=>{try{await navigator.clipboard.writeText(titleInput.value.trim());copyStatus.textContent='标题已复制为纯文本。';}catch(error){titleInput.focus();titleInput.select();copyStatus.textContent='标题已选中，请按 Ctrl+C，复制结果为纯文本。';}};
+document.querySelector('#home').onclick=()=>{location.assign(document.baseURI);};
+const cancelButton=document.querySelector('#cancel-job'), reportLink=document.querySelector('#error-report');
+cancelButton.onclick=async()=>{cancelButton.disabled=true;cancelButton.textContent='正在取消…';try{await post('api/cancel',{job});}catch(error){cancelButton.disabled=false;cancelButton.textContent='取消转换';copyStatus.textContent='取消失败：'+error.message;}};
+async function post(path,data){const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});if(!response.ok)throw new Error('服务已停止');return response.json();}
+function beat(){post('api/result-heartbeat',{job,viewer}).catch(()=>{});}
+function release(){navigator.sendBeacon(new URL('api/release',document.baseURI),JSON.stringify({job,viewer}));}
+window.addEventListener('pagehide',release);window.addEventListener('pageshow',beat);
+setInterval(beat,20000);beat();
+function renderConsole(item){const progress=item.progress||{},total=Number(progress.total)||0,step=Number(progress.step)||0;
+  const idle={queued:'等待前一份报告完成…',cancelled:'已取消，未开始转换',error:'未能开始转换'};
+  const head=total?`[STEP ${step}/${total}] ${progress.text||''}  ·  ${Math.round(step/total*100)}%`:(idle[item.state]||'正在启动转换…');
+  const lines=(item.log||[]).join('\n'), failure=item.state==='error'?`\n\n${item.error||'转换失败。'}`:'';
+  const atBottom=consoleBox.scrollHeight-consoleBox.scrollTop-consoleBox.clientHeight<24;
+  consoleBox.textContent=`${item.name}\n${head}\n\n${lines}${failure}`;
+  if(atBottom)consoleBox.scrollTop=consoleBox.scrollHeight;}
+let shownIndex=-1,expired=false,serverNow=0,jobModes=[],tabsSignature='',titleIndex=-1;
+function fmtDuration(seconds){const s=Math.max(0,Math.round(seconds));return s<60?`${s} 秒`:`${Math.floor(s/60)} 分 ${String(s%60).padStart(2,'0')} 秒`;}
+function estimateSeconds(stats,modes){
+  // 系数来自 tests/perf-v0120：52 份真实样本回归（i7-13700K 台机）× 轻薄本换算 1.40
+  // （标定 Core Ultra 5 225H / R7 7840 级，取最慢目标；宁可稍高估）
+  if(!stats||!Array.isArray(modes))return null;
+  const mode=modes.includes('weekly')?'weekly':modes.includes('body')?'depth':modes.includes('summary')?'summary':null;
+  if(!mode)return null;
+  const size=Number(stats.size),mediaBytes=Number(stats.media_bytes),chars=Number(stats.chars);
+  let s;
+  if(mode==='summary')s=9.899625;
+  else if(mode==='weekly'){if(!Number.isFinite(size)||size<0)return null;s=4.700497+3.432233*Math.sqrt(size/1e6);}
+  else{if(!Number.isFinite(size)||size<0||!Number.isFinite(mediaBytes)||mediaBytes<0||!Number.isFinite(chars)||chars<0)return null;
+    s=12.353858+2.5927*Math.max(0,size-mediaBytes)/1e6+4.08198*chars/1e4;}
+  return Math.ceil(s*1.40);
+}
+function runningBanner(item){const eta=estimateSeconds(item.stats,item.detected_modes||jobModes);const run=item.started&&serverNow?serverNow-item.started:null;
+  if(eta==null&&run==null)return '';
+  const parts=[];if(eta!=null)parts.push(`预计完成时间 ${fmtDuration(eta)}`);if(run!=null)parts.push(`已运行 ${fmtDuration(run)}`);
+  return parts.join('，')+(eta!=null?'（取决于计算机性能）':'');}
+function connLost(){status.textContent='⚠ 无法连接转换服务，正在重试…（服务可能已退出，可返回主页重新生成）';status.classList.add('warn');status.classList.remove('info');status.hidden=false;}
+function show(index){if(expired)return;const item=items[index];if(index!==shownIndex){copyStatus.textContent='';shownIndex=index;}selected=index;const done=item.state==='done';status.classList.toggle('warn',done&&!!item.warnings?.length);status.classList.toggle('info',done&&!item.warnings?.length&&!item.self_check);
+  reportLink.hidden=item.state!=='error';
+  if(item.state==='error')reportLink.href=new URL(`report/${encodeURIComponent(job)}/${index}`,document.baseURI).href;
+  titleInput.hidden=!done;titleStatus.hidden=done;frame.hidden=!done;consoleBox.hidden=done;
+  document.querySelectorAll('#files button').forEach((button,i)=>{button.classList.toggle('active',i===index);button.setAttribute('aria-pressed',String(i===index));});
+  // 标题框只在内容确实要变、或换了另一份报告时才写：轮询每轮无条件赋值会打断
+  // 输入法组合与选区；只比字符串又会让「两份报告标题恰好相同」时残留上一份的选区
+  if(done){const wanted=titleDrafts.get(index)??item.title??'';
+    if(titleIndex!==index||titleInput.value!==wanted){titleInput.value=wanted;titleIndex=index;}
+    titleInput.disabled=false;titleButton.disabled=!titleInput.value.trim();sizeTitle();    // 三表是按设置主动省略的，完成态也要说出来：否则「自检通过：…完整保留」
+    // 容易被读成“源报告内容一字未减”
+    const omitted=item.forecast_stripped?'已按设置省略文末三大财务预测表；':'';
+    status.textContent=item.warnings?.length?'⚠ '+omitted+item.warnings.map(w=>w.replace(/^\s*\[warn\]\s*/,'')).join('；'): (item.self_check?`✓ ${omitted}自检通过：${item.self_check}完整保留，可复制到公众号编辑器`:(omitted+(item.self_check_hint||'检查文字、图表和来源后，复制到公众号编辑器')));if(loaded!==item.url){loaded=item.url;copyButton.disabled=true;frame.src=new URL(item.url,document.baseURI).href;}}
+  else{titleInput.disabled=true;titleButton.disabled=true;
+    if(item.state==='running'){status.textContent=runningBanner(item);status.classList.add('info');status.classList.remove('warn');}
+    else status.textContent='';
+    titleStatusText.textContent=stateWords[item.state]||'处理中';titleStatus.classList.toggle('failed',item.state==='error');spinner.hidden=['error','cancelled'].includes(item.state);renderConsole(item);loaded='';frame.removeAttribute('src');copyButton.disabled=true;}
+  status.hidden=!status.textContent;
+  if(pollFails>=3)connLost();}
+// 只有真的载入了报告 HTML 才放开复制：失效/清理后的同源 404、403 会以 text/plain
+// 或 JSON 渲染出一个可读的 body，不校验就会把错误正文复制进公众号编辑器
+function frameHasReport(){const doc=frame.contentDocument;
+  return !!doc&&doc.contentType==='text/html'&&!!doc.body&&!!doc.body.querySelector('*');}
+frame.addEventListener('load',()=>{copyButton.disabled=!loaded||expired||!frameHasReport();});
+function selectBody(){const doc=frame.contentDocument;const range=doc.createRange();range.selectNodeContents(doc.body);const selection=frame.contentWindow.getSelection();selection.removeAllRanges();selection.addRange(range);frame.contentWindow.focus();}
+function copyFragment(doc){
+  const section=doc.createElement('section');section.style.cssText=doc.body.style.cssText;
+  for(const property of ['margin','padding','max-width'])section.style.removeProperty(property);
+  for(const node of doc.body.childNodes)section.append(node.cloneNode(true));
+  const originals=[doc.body,...doc.body.querySelectorAll('*')],clones=[section,...section.querySelectorAll('*')];
+  const properties=['font-family','font-size','font-weight','font-style','color','line-height','text-align','text-indent','letter-spacing','word-spacing','white-space','word-break','overflow-wrap','text-decoration-line','text-decoration-color','text-decoration-style','text-decoration-thickness','text-underline-offset'];
+  originals.forEach((node,index)=>{const style=doc.defaultView.getComputedStyle(node);for(const property of properties)clones[index].style.setProperty(property,style.getPropertyValue(property));
+    // Chromium's paste cleanup flattens explicit 900 inside a 700-weight parent.
+    if(node.tagName==='STRONG'&&style.fontWeight==='900'&&doc.defaultView.getComputedStyle(node.parentElement).fontWeight==='700')clones[index].style.fontWeight='bolder';
+  });
+  return section.outerHTML;
+}
+document.querySelector('#copy').onclick=async()=>{try{const doc=frame.contentDocument;await navigator.clipboard.write([new ClipboardItem({'text/html':new Blob([copyFragment(doc)],{type:'text/html'}),'text/plain':new Blob([doc.body.innerText],{type:'text/plain'})})]);copyStatus.textContent='已复制文字与 HTML 格式，请粘贴到公众号编辑器。';}catch(error){selectBody();copyStatus.textContent='浏览器未允许自动复制。正文已选中，请按 Ctrl+C。';}};
+let pollFails=0;
+async function poll(){try{const response=await fetch('api/jobs/'+job);const data=await response.json();if(!response.ok)throw new Error(data.error||'无法读取结果');pollFails=0;items=data.items;serverNow=data.now||0;jobModes=data.modes||[];cancelButton.hidden=data.state==='done';const container=document.querySelector('#files');container.hidden=items.length<2;
+  // 只有名称或状态真的变了才重建标签：否则每轮轮询都会把当前聚焦的按钮移出 DOM
+  const signature=items.map(item=>item.name+''+item.state).join('');
+  if(signature!==tabsSignature){tabsSignature=signature;container.replaceChildren();items.forEach((item,index)=>{const button=document.createElement('button');const st=document.createElement('span');
+    if(item.state==='running'){st.className='spinner';}
+    else{st.className='st '+({done:'done',error:'failed',cancelled:'cancelled'}[item.state]||'pending');st.textContent={done:'✓',error:'!',cancelled:'–'}[item.state]||'';}
+    st.setAttribute('aria-hidden','true');
+    const label=document.createElement('span');label.className='tab-label';label.textContent=item.name.replace(/\.docx?$/i,'');
+    button.append(st,label);button.title=item.name+'（'+({done:'已完成',error:'失败',running:'转换中',queued:'等待中',cancelled:'已取消'}[item.state]||item.state)+'）';
+    button.classList.toggle('running',item.state==='running');button.classList.toggle('pending',item.state==='queued');
+    button.onclick=()=>show(index);container.append(button);});}
+  if(selected<0)selected=0;show(selected);
+  // 批次完成后转慢轮询而不是停：否则服务退出或结果过期都不会再反映到页面，
+  // 尚未预览过的报告会停在“已完成”提示却打不开
+  if(data.state==='done'){setTimeout(poll,15000);return;}}catch(error){
+  // 只有“结果已清理”这类终态才停；一次网络抖动继续按退避间隔轮询，页面不能永久停更
+  if(/结果已清理/.test(error.message)){expired=true;copyButton.disabled=true;titleButton.disabled=true;titleInput.disabled=true;cancelButton.hidden=true;reportLink.hidden=true;
+    document.querySelectorAll('#files button').forEach(button=>{button.disabled=true;});
+    status.textContent='⚠ '+error.message;status.classList.add('warn');status.classList.remove('info');status.hidden=false;return;}
+  if(++pollFails>=3)connLost();
+  setTimeout(poll,3000);return;}setTimeout(poll,1200);}
+async function showUpdate(){try{const response=await fetch('api/update',{cache:'no-store'});const data=await response.json();if(!data||!data.version||!data.url)return;const link=document.querySelector('#update');link.textContent='有新版本 '+data.version+' ↗';link.href=data.url;link.title='打开下载页面';link.classList.remove('hidden');link.style.display='inline-block';}catch{}}
+showUpdate();
+poll();
+</script>
+</body></html>

@@ -1,0 +1,20 @@
+{
+  "output": {
+    "font_family": "Microsoft YaHei, sans-serif",
+    "font_size_px": 14,
+    "page_margin_css": "24px auto",
+    "page_padding_css": "0 20px",
+    "page_max_width_px": 860,
+    "page_background_color": "#ffffff",
+    "page_text_color": "#000000",
+    "first_line_indent_em": 2,
+    "paragraph_margin_bottom_em": 0.85,
+    "paragraph_margin_top_css": "0",
+    "paragraph_margin_right_css": "0",
+    "paragraph_margin_left_css": "0",
+    "inline_bold_font_weight": 700,
+    "inline_underline_text_decoration": "underline",
+    "inline_underline_offset_em": 0.08,
+    "generate_html": true
+  }
+}

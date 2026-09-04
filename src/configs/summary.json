@@ -1,0 +1,59 @@
+{
+  "output": {
+    "line_height": 2.0,
+    "output_suffix": "_summary_extractor.html"
+  },
+  "summary": {
+    "control_name_keywords": [
+      "报告摘要",
+      "AUTO_SAVE_Summary"
+    ],
+    "start_heading_keywords": [
+      "投资要点",
+      "核心观点",
+      "摘要",
+      "主要观点"
+    ],
+    "require_left_align_for_heading": true,
+    "fallback_to_first_page": true,
+    "strip_leading_markers": true,
+    "detect_heading_by_neighbors": true
+  },
+  "styles": {
+    "subheading_bg_color": "#76A2E9",
+    "subheading_text_color": "#FFFFFF",
+    "subheading_font_family": "Microsoft YaHei, sans-serif",
+    "subheading_font_size_px": 14,
+    "subheading_line_height": 1.5,
+    "subheading_border_radius_px": 8,
+    "subheading_padding_vertical_em": 0.22,
+    "subheading_padding_horizontal_em": 0.55,
+    "subheading_margin_top_em": 1.15,
+    "subheading_margin_right_css": "0",
+    "subheading_margin_bottom_em": 0.55,
+    "subheading_margin_left_css": "0",
+    "subheading_text_indent_css": "0",
+    "subheading_text_align": "left",
+    "subheading_font_weight": 700,
+    "bullet_line_height": 2.0,
+    "bullet_paragraph_margin_css": "0",
+    "bullet_paragraph_text_indent_css": "0",
+    "bullet_paragraph_text_align": "left",
+    "bullet_list_style_type": "square",
+    "bullet_list_margin_top_css": "0",
+    "bullet_list_margin_right_css": "0",
+    "bullet_list_margin_left_css": "0",
+    "heading_blank_line_before": true,
+    "bullet_list_padding_left_em": 1.55,
+    "bullet_list_margin_bottom_em": 0.85,
+    "bullet_item_margin_top_px": 8,
+    "heading_spacer_margin_css": "0",
+    "heading_spacer_text_indent_css": "0",
+    "heading_spacer_text_align": "left"
+  },
+  "matching": {
+    "leading_marker_regex": "^\\[[A-Za-z0-9_]+\\]",
+    "bullet_chars_regex": "^[\\u25A0\\u25AA\\u25CF\\u2022\\u2027\\u00B7\\-\\*]+",
+    "space_regex": "\\s+"
+  }
+}
