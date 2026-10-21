@@ -736,7 +736,7 @@ def convert(root: Path, source: Path, modes: list, output: Path, toc: bool,
         note_modes(progress, modes, forecast_append)
     progress.plan(5 if auto and not detected else plan_steps(modes, forecast_append))
     try:
-        with tempfile.TemporaryDirectory(prefix="conversion_", dir=output.parent) as temporary:
+        with tempfile.TemporaryDirectory(prefix="conversion_", dir=output.parent, ignore_cleanup_errors=True) as temporary:
             tempfile.tempdir = temporary
             fragments = []
             forecast_blocks = []
@@ -766,7 +766,15 @@ def convert(root: Path, source: Path, modes: list, output: Path, toc: bool,
                     converter = (engine.SummaryExtractor(cfg) if mode == "summary"
                                  else engine.HtmlCleaner(cfg))
                     process = engine.process_summary_file if mode == "summary" else engine.process_one_file
-                    result = process(source, part_dir, converter, word, cfg)
+                    if mode == "summary" and len(configs) > 1:
+                        # 摘要 + 正文/周报：摘要取不到时照常交付正文，告警请人工补充摘要；只转摘要时摘要就是全部内容，照常失败
+                        try:
+                            result = process(source, part_dir, converter, word, cfg)
+                        except Exception as exc:
+                            progress.note(f"[warn] 摘要未能提取，已只输出正文，请对照原文人工补充摘要：{type(exc).__name__}: {exc}")
+                            continue
+                    else:
+                        result = process(source, part_dir, converter, word, cfg)
                     rendered = Path(result["html"]).read_text(encoding="utf-8")
                     if mode == "summary":
                         fragments.append(summary_fragment(rendered, depth_style="body" in modes))
@@ -820,8 +828,14 @@ def convert(root: Path, source: Path, modes: list, output: Path, toc: bool,
                     strip_forecast_tables(body_soup)
                 plain_text = body_soup.get_text(" ")
                 paragraph_texts = [p.get_text() for p in body_soup.find_all("p")]
-                results = [report_caption_check(source, paragraph_texts, progress),
-                           report_text_check(root, source, plain_text, progress)]
+                results = []
+                for label, check in (("图表自检", lambda: report_caption_check(source, paragraph_texts, progress)),
+                                     ("文字自检", lambda: report_text_check(root, source, plain_text, progress))):
+                    try:
+                        results.append(check())
+                    except Exception as exc:
+                        print(f"  [warn] {label}未能完成：{type(exc).__name__}: {exc}", flush=True)
+                        results.append(None)
                 ran = [r for r in results if r is not None]
                 if ran and all(ran):
                     self_check = "；".join(ran)
@@ -865,8 +879,11 @@ def main() -> int:
     try:
         title_fields = convert(args.root.resolve(), source, modes, output, args.toc, args.forecast_tables)
         if metadata:
-            metadata.parent.mkdir(parents=True, exist_ok=True)
-            metadata.write_text(json.dumps(title_fields, ensure_ascii=False), encoding="utf-8")
+            try:
+                metadata.parent.mkdir(parents=True, exist_ok=True)
+                metadata.write_text(json.dumps(title_fields, ensure_ascii=False), encoding="utf-8")
+            except OSError as exc:
+                print(f"  [warn] 标题等信息未能写出：标题请手动填写，自检与文末三表的处理情况无法显示（{exc}）", flush=True)
         print(f"HTML：{output}", flush=True)
         return 0
     except Exception:

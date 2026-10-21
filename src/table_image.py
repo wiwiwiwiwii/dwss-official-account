@@ -115,8 +115,9 @@ def _load_thumb(path, target_h, max_w):
         return None
 
 
-def render_table(spec, out_path):
-    """把通用网格 spec 渲染成 PNG。返回 (out_path, (w, h))。"""
+def render_table(spec, out_path, missing=None):
+    """把通用网格 spec 渲染成 PNG。返回 (out_path, (w, h))。
+    missing 是列表时，读不出的单元格图片（该格按无图留空）逐个记进去，交调用方告警。"""
     cells = spec.get("cells") or []
     ncols = int(spec.get("ncols") or 0)
     nrows = int(spec.get("nrows") or 0)
@@ -153,6 +154,8 @@ def render_table(spec, out_path):
             thumb = _load_thumb(path, thumb_h, max_col_w)
             if thumb is not None:
                 imgs.append(thumb)
+            elif missing is not None:
+                missing.append(path)
         cell["_imgs"] = imgs
 
     def cell_natural_w(cell):

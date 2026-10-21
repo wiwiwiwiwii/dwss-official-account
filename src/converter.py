@@ -391,6 +391,23 @@ def ensure_dependencies() -> None:
         )
 
 
+# 确定意味着缺图的 render_problems 记录前缀（出口兜底据此补告警）
+LOSS_PROBLEM_PREFIXES = ("图片地址为空或无法解析", "图片未能内嵌", "表格单元格里的图片无法读取", "表图渲染失败", "图框内贴入的表格")
+# 网页成品里没能内嵌的本机图片标签（data: 与 http(s) 以外的地址）
+LOCAL_IMG_RE = re.compile(r"<img\b[^>]*?\bsrc=\"(?!data:|https?:)[^\"]*\"[^>]*>", re.I)
+
+
+def close_document(doc) -> None:
+    """不保存关闭文档。关闭失败只报警：SaveAs 写出的文件、已读出的内容都不依赖关闭；
+    Word 若因此不可用，下一次调用会照常报错或由调用方重建实例。"""
+    if doc is None:
+        return
+    try:
+        doc.Close(SaveChanges=WD_DO_NOT_SAVE_CHANGES)
+    except Exception as exc:
+        print(f"  [warn] Word document close failed: {type(exc).__name__}: {exc}")
+
+
 def _end_marked_word(caption: str, wait_seconds: float = 10.0) -> bool:
     """结束标题含 caption 的那个 WINWORD（本程序实例的唯一窗口标记）：按 OpusApp 窗口标题定位，
     确认进程映像是 WINWORD.EXE 才结束。Word 打开文档后标题是「文档名 - 标记」，所以做包含匹配。
@@ -469,8 +486,8 @@ class WordApp:
         try:
             self._start()
             return self
-        except Exception:
-            self.__exit__(None, None, None)
+        except Exception as exc:
+            self.__exit__(type(exc), exc, exc.__traceback__)
             raise
 
     def _start(self) -> None:
@@ -586,13 +603,24 @@ class WordApp:
                 try:
                     self.word.Quit()
                 except Exception as close_error:
+                    # with 块已正常结束时 Word 的工作都已完成，实例却已退出或断开（常见于内存加速、
+                    # 清理类软件结束了后台 Word）：成品不受影响，按窗口标记收尾后继续写出
                     if exc_type is None:
-                        raise
-                    print(f"  [warn] Word close failed: {close_error}")
+                        print(f"  [warn] Word 已提前退出（常见于内存加速、清理类软件结束了后台 Word），本次内容已全部取得：{close_error}")
+                    else:
+                        print(f"  [warn] Word close failed: {close_error}")
+                    if self._caption:
+                        try:
+                            _end_marked_word(self._caption, wait_seconds=5.0)
+                        except Exception as reap_error:
+                            print(f"  [warn] Word cleanup failed: {reap_error}")
         finally:
             self.word = None
             if self.pythoncom is not None:
-                self.pythoncom.CoUninitialize()
+                try:
+                    self.pythoncom.CoUninitialize()
+                except Exception:
+                    pass
                 self.pythoncom = None
 
     def export_filtered_html(self, src: Path, html_path: Path) -> None:
@@ -614,8 +642,7 @@ class WordApp:
                         )
             doc.SaveAs(str(html_path), FileFormat=WD_FORMAT_FILTERED_HTML)
         finally:
-            if doc is not None:
-                doc.Close(SaveChanges=WD_DO_NOT_SAVE_CHANGES)
+            close_document(doc)
 
     def export_docx(self, src: Path, docx_path: Path) -> None:
         doc = None
@@ -623,8 +650,7 @@ class WordApp:
             doc = self.open_document(src)
             doc.SaveAs(str(docx_path), FileFormat=WD_FORMAT_XML_DOCUMENT)
         finally:
-            if doc is not None:
-                doc.Close(SaveChanges=WD_DO_NOT_SAVE_CHANGES)
+            close_document(doc)
 
     def convert_html_to_docx(self, html_path: Path, docx_path: Path) -> None:
         doc = None
@@ -632,8 +658,7 @@ class WordApp:
             doc = self.open_document(html_path)
             doc.SaveAs(str(docx_path), FileFormat=WD_FORMAT_XML_DOCUMENT)
         finally:
-            if doc is not None:
-                doc.Close(SaveChanges=WD_DO_NOT_SAVE_CHANGES)
+            close_document(doc)
 
     def extract_front_matter(self, src: Path, summary_extractor, want_summary: bool, want_toc: bool):
         """打开源文档一次, 返回 (摘要正文 HTML, 目录域条目列表)。
@@ -658,8 +683,7 @@ class WordApp:
                     print(f"  [warn] TOC field read failed: {exc}")
                     toc_list = []
         finally:
-            if doc is not None:
-                doc.Close(SaveChanges=WD_DO_NOT_SAVE_CHANGES)
+            close_document(doc)
         return summary_html, toc_list
 
     def _read_toc_entries(self, doc) -> List[List[dict]]:
@@ -922,8 +946,11 @@ class SummaryExtractor:
                 cc = controls(idx)
             except Exception:
                 continue
-            title = self._normalize_text(str(getattr(cc, "Title", "") or ""))
-            tag = self._normalize_text(str(getattr(cc, "Tag", "") or ""))
+            try:
+                title = self._normalize_text(str(getattr(cc, "Title", "") or ""))
+                tag = self._normalize_text(str(getattr(cc, "Tag", "") or ""))
+            except Exception:
+                continue
             hay = title + " " + tag
             if any(k in hay for k in keywords):
                 try:
@@ -932,7 +959,10 @@ class SummaryExtractor:
                     is_placeholder = False
                 if is_placeholder:
                     continue
-                return cc.Range.Duplicate
+                try:
+                    return cc.Range.Duplicate
+                except Exception:
+                    continue
         return None
 
     def _get_page_range(self, doc, page_number: int):
@@ -1527,6 +1557,7 @@ class Block:
         self.style_text = style
         self.is_toc = False
         self.drop = False
+        self.render_failure: Optional[Exception] = None   # 预处理期这一块出错：渲染时只留空行并定位告警
         self.role = "normal"
         self.figure_segments = []
         self.heading_level = 0
@@ -1799,6 +1830,11 @@ class HtmlCleaner:
         # 点评附三表那一遍据此判断摘出的区块是否完整（见 convert_worker）。序号用来
         # 把判断限定在三表区块自身，报告别处的问题不牵连它。只记录，不改渲染结果。
         self.render_problems: List[dict] = []
+        self.failed_blocks: List[dict] = []
+        self._current_heading = ""
+        self._previous_caption = ""
+        self._heading_at: Dict[int, str] = {}
+        self._current_block: Optional[Block] = None
         # 每个进入成品的源块的 (序号, 归一化文字)，供调用方按文字定位区块起点。
         self.rendered_block_texts: List[Tuple[int, str]] = []
         self._current_block_idx = -1
@@ -1808,6 +1844,46 @@ class HtmlCleaner:
         # （表格的题注/来源行），也可能整支子树都不走（wrapper 表选中内层网格转图），
         # 两种丢法在取址出口上都看不见，只能靠「源块里的图有没有被用掉」兜住。
         self._visited_image_counts: Counter = Counter()
+
+    def _caption_label(self, text: str) -> str:
+        match = re.match(r"\s*([图表])\s*(\d+)", text or "")
+        return f"{match.group(1)}{match.group(2)}" if match and self.re_caption.search(text) else ""
+
+    def _note_failed(self, block: Block, detail: str, error: str) -> None:
+        # 同一块同一类问题只记一次（单元格图片在建表与核对时会被读到不止一遍）
+        if any(item["idx"] == block.idx and item["detail"] == detail for item in self.failed_blocks):
+            return
+        kind ="表格" if (block.tag.name or "").lower() == "table" else ("图片" if block.has_image else "段落")
+        # 图表序号只用于定位失败的图表；文字段落失败按页码与章节定位
+        caption = ""
+        if kind != "段落":
+            built = getattr(block, "table_build", None) or {}
+            caption_text = BeautifulSoup(built.get("caption_html") or "", "html.parser").get_text(" ", strip=True)
+            caption = self._caption_label(caption_text) or self._caption_label(block.text) or self._previous_caption
+        self.failed_blocks.append({"idx": block.idx, "kind": kind, "opening": block.text[:24], "caption": caption,
+                                   "detail": detail, "error": error})
+        self._note_render_problem(f"{detail}：{error}")
+
+    def _render_failed_block(self, block: Block, exc: Exception) -> str:
+        self._note_failed(block, "未能转换，原位置只留一个空行", f"{type(exc).__name__}: {exc}")
+        # 只留空行、不放占位文字：误发出去时空行几乎无害，占位句会直接出现在读者面前
+        return self._render_body_paragraph_html("<br/>")
+
+    def report_failed_blocks(self, pages: Optional[Dict[int, List[int]]] = None) -> None:
+        """失败块逐条告警（结果页红色信息条）：Word 页码、章节、图表序号、块序号与开头文字。
+        章节与开头文字放进「」：脱敏错误报告整行剔除含「」的行，不把正文带进报告。"""
+        for item in self.failed_blocks:
+            where = []
+            hits = (pages or {}).get(item["idx"]) or []
+            if hits:
+                where.append("Word 第 " + "、".join(str(page) for page in hits) + " 页")
+            chapter = self._heading_at.get(item["idx"], "")
+            if chapter:
+                where.append(f"「{chapter[:30]}」一节")
+            if item["caption"]:
+                where.append(item["caption"])
+            where.append(f"正文第 {item['idx']} 块（{item['kind']}，开头「{item['opening']}」）")
+            print(f"  [warn] {'、'.join(where)}{item['detail']}，请对照原文人工补充：{item['error']}", flush=True)
 
     def _note_render_problem(self, message: str) -> None:
         self.render_problems.append({"idx": self._current_block_idx, "message": message})
@@ -1854,6 +1930,9 @@ class HtmlCleaner:
             raise ProcessingError(f"No usable content found in HTML: {html_path}")
 
         self._current_block_idx = -1
+        self._current_block = None
+        self.failed_blocks = []
+        self._heading_at = {}
         self._mark_toc_blocks(blocks)
         start_idx = self._find_start_index(blocks)
         stop_idx = self._find_stop_index(blocks, start_idx)
@@ -1868,14 +1947,34 @@ class HtmlCleaner:
         need_docx_html = bool(self.out_cfg.get("generate_docx", False))
         rendered_blocks = []
         rendered_blocks_docx = []
+        self._current_heading = ""
+        self._previous_caption = ""
+        # 导出 HTML 会在中文与数字间多出空格、标题前多出自动编号：去掉空白再比较，章节名用大纲原文
+        heading_texts = {re.sub(r"\s+", "", entry.get("text", "")): entry.get("text", "").strip()
+                         for entry in self.heading_outline if (entry.get("text") or "").strip()}
         for block in blocks:
             if block.drop:
                 continue
             self._current_block_idx = block.idx
             # 不在这里清空 _visited_image_counts：表格规格是在渲染循环之前的
             # _mark_media_related_blocks 里建好的，清空会把那批用图记录抹掉
-            rendered = self._render_block(block, for_docx=False)
+            compact = re.sub(r"\s+", "", block.text)
+            for key, heading in heading_texts.items():
+                if compact == key or (compact.endswith(key) and len(compact) - len(key) <= 6):
+                    self._current_heading = heading
+                    break
+            self._heading_at[block.idx] = self._current_heading
+            self._current_block = block
+            try:
+                if getattr(block, "render_failure", None) is not None:
+                    raise block.render_failure
+                rendered = self._render_block(block, for_docx=False)
+            except Exception as exc:
+                # 单块出错不让整份作废：原位置只留空行，告警（结果页红色信息条）点明第几块，
+                # 并记进 render_problems，使三表附加等要求完整的调用方照常放弃
+                rendered = self._render_failed_block(block, exc)
             rendered = rendered.strip()
+            self._previous_caption = self._caption_label(block.text)
             source_srcs = self._image_srcs(block.tag)
             # 源块里有图、渲染结果却一张也没有：这一块整个消失了（如 remove_tables 下
             # 的单格图片表），既不报错也不打日志，只有这里能记下来
@@ -1900,10 +1999,25 @@ class HtmlCleaner:
         if not rendered_blocks:
             raise ProcessingError("Nothing left after cleaning. Check config or document structure.")
 
+        # 出口兜底：确定意味着缺图的内部记录（图片解析不到、未能内嵌、单元格图片取不到、表图或贴入表渲染失败）
+        # 却还没告警的块，补一条定位告警。「源块中的图片没有进入成品 / 没被用掉」是给三表判定用的从严记账，
+        # 在较早模板上噪声多（55 份批量中 18 份各有 8~35 条），不升级为告警
+        by_idx = {block.idx: block for block in blocks}
+        reported = {item["idx"] for item in self.failed_blocks}
+        for problem in list(self.render_problems):
+            if not problem["message"].startswith(LOSS_PROBLEM_PREFIXES):
+                continue
+            block = by_idx.get(problem["idx"])
+            if block is not None and block.idx not in reported:
+                reported.add(block.idx)
+                self._note_failed(block, "中有图片或表格未能完整进入成品（缺失处留空）", problem["message"])
+
         # 前置内容(摘要 + 内容目录图)拼到正文之前。资产注册在本方法的资产生命周期内完成
         # (current_html_path / asset_map 已就绪), 故必须在这里拼, 不能在 clean_html_file 之外。
         front_html = self._build_front_matter(summary_html, toc_png_path, for_docx=False)
         rendered_blocks = front_html + rendered_blocks
+        # 网页成品只认内嵌图：没能换成 data: 的本机图片地址粘贴后是破图、还带出本机路径，删掉只留空白（已在上面告警）
+        rendered_blocks = [LOCAL_IMG_RE.sub("", part) for part in rendered_blocks]
         if need_docx_html:
             front_docx = self._build_front_matter(summary_html, toc_png_path, for_docx=True)
             rendered_blocks_docx = front_docx + rendered_blocks_docx
@@ -2104,12 +2218,19 @@ class HtmlCleaner:
                     import table_image as ti
 
                     out_png = Path(self.generated_dir) / f"figure_pasted_table_{len(cache)}.png"
-                    ti.render_table(spec, str(out_png))
+                    missing: List[str] = []
+                    ti.render_table(spec, str(out_png), missing=missing)
                     png_path = str(out_png)
                     print(f"  -> figure-frame pasted table image: {spec['nrows']} rows x {spec['ncols']} cols")
+                    if missing and self._current_block is not None:
+                        self._note_failed(self._current_block, f"图框内贴入的表格中有 {len(missing)} 张单元格图片未能读取（表图中该格留空）",
+                                          "image unreadable")
             except Exception as e:
                 print(f"  -> figure-frame pasted table skipped: {e}")
-                self._note_render_problem(f"图框内贴入的表格渲染失败：{e}")
+                if self._current_block is not None:
+                    self._note_failed(self._current_block, "图框内贴入的表格未能转成图片（该处留空）", f"{type(e).__name__}: {e}")
+                else:
+                    self._note_render_problem(f"图框内贴入的表格渲染失败：{e}")
         cache[key] = png_path
         return png_path or None
 
@@ -2458,9 +2579,11 @@ class HtmlCleaner:
             resolved = self._resolve_local_image(src)
             if resolved:
                 files.append(resolved)
+            elif self._current_block is not None:
+                # 表格转图时单元格里的图取不到：整表照样渲染成一张完好的 PNG，该格留空，
+                # 少掉的那张图在成品里看不出来，只有这里能记下并定位告警
+                self._note_failed(self._current_block, "中有单元格图片无法读取（表图中该格留空）", "image not found")
             else:
-                # 表格转图时单元格里的图取不到：整表照样渲染成一张完好的 PNG，
-                # 少掉的那张图在成品里看不出来，只有这里能记下
                 self._note_render_problem(f"表格单元格里的图片无法读取：{(src or '').strip()[:120]!r}")
         return files
 
@@ -2800,9 +2923,12 @@ class HtmlCleaner:
             import table_image as ti
 
             out_png = Path(self.generated_dir) / f"data_table_{block.idx}.png"
-            ti.render_table(spec, str(out_png))
+            missing: List[str] = []
+            ti.render_table(spec, str(out_png), missing=missing)
             block.table_png_path = str(out_png)
             print(f"  -> data table image: {spec['nrows']} rows x {spec['ncols']} cols (block {block.idx})")
+            if missing:
+                self._note_failed(block, f"中有 {len(missing)} 张单元格图片未能读取（表图中该格留空）", "image unreadable")
         except Exception as e:
             print(f"  -> data table skipped (block {block.idx}): {e}")
             self._note_render_problem(f"表图渲染失败（block {block.idx}）：{e}")
@@ -2825,7 +2951,17 @@ class HtmlCleaner:
         # \u8868\u4f53\uff1a\u751f\u6210\u7684\u8868\u683c\u56fe\u7247\uff1b\u6e32\u67d3\u5931\u8d25\u5219\u515c\u5e95\u6210\u6587\u5b57\u6bb5\u843d\uff0c\u907f\u514d\u300c\u770b\u4f3c\u6210\u529f\u4f46\u8868\u6ca1\u4e86\u300d
         png = self._ensure_table_png(block, spec)
         if png:
-            resolved = self._register_asset(Path(png).as_uri(), inline=not for_docx)
+            try:
+                resolved = self._register_asset(Path(png).as_uri(), inline=not for_docx)
+            except PermissionError as exc:
+                # 表图一直被其他程序独占：纯文字表改走文字兜底（内容都在 spec 里）；含图片的表没有完整退路，照常失败
+                if spec is None or any(cell.get("images") for cell in spec.get("cells", [])):
+                    raise
+                print(f"  [warn] table image unreadable, kept as text: {exc}")
+                resolved = None
+                fallback = self._render_spec_as_text(spec)
+                if fallback:
+                    parts.append(fallback)
             if resolved:
                 image_margin = self.out_cfg.get("image_margin_css", "0 auto")
                 image_border = self.out_cfg.get("image_border_css", "0")
@@ -2835,6 +2971,9 @@ class HtmlCleaner:
                 )
                 parts.append(self._render_figure_images_html([img_html]))
         elif spec is not None:
+            # 含图片的表没有完整的文字退路：交给逐块失败处理（只留空行、定位告警），不写「[图片]」占位
+            if any(cell.get("images") for cell in spec.get("cells", [])):
+                raise ProcessingError("含图片的表格未能转成图片")
             fallback = self._render_spec_as_text(spec)
             if fallback:
                 parts.append(fallback)
@@ -2859,8 +2998,6 @@ class HtmlCleaner:
                 lines = c.get("lines") or []
                 if lines:
                     pieces.append(" ".join(lines))
-                elif c.get("images"):
-                    pieces.append("[图片]")     # 图片列也保留占位，别让文字兜底里整列消失
             txt = " | ".join(pieces)
             if txt.strip(" |"):
                 paras.append(self._render_body_paragraph_html(html.escape(txt)))
@@ -3056,6 +3193,7 @@ class HtmlCleaner:
             # 这一趟就会解析表格规格并读取单元格里的图片，丢图记录必须落在正确的源块上：
             # 少了这一行，预处理期的记录都挂到 idx=-1，按序号取区块内记录时会被漏掉
             self._current_block_idx = block.idx
+            self._current_block = block
 
             if block.tag.name == "table":
                 # 估值表(行业公司估值表)：用专门的 11 列渲染器(valuation_table_image)转图，最优先。
@@ -3075,7 +3213,12 @@ class HtmlCleaner:
                 # 避免「题注行 colspan 盖到图片列」时被误当图表 wrapper、丢掉其它数据列/行。
                 # 例外：表里有「纯图片行里的大图」(图表本体的典型形态)时仍按图表处理，避免把大图缩成表格缩略图；
                 # 但「文字+大图」的数据表(大图在带文字的数据行里)不受此例外影响，仍走 data_table。
-                figure_segments = self._extract_figure_segments_from_table(block.tag)
+                try:
+                    figure_segments = self._extract_figure_segments_from_table(block.tag)
+                except Exception as exc:
+                    # 预处理期就读图（单元格图片被独占等）：只把这一块记为失败，渲染时留空行并定位告警
+                    block.render_failure = exc
+                    continue
                 if figure_segments and not remove_images:
                     if self._has_chart_like_image(block.tag) or not self._looks_dense_grid(block.tag):
                         block.role = "figure_table"
@@ -3087,7 +3230,11 @@ class HtmlCleaner:
                 # 仅当确实是一张「>=2 行 x >=2 列」的表才转，避免把布局用的单格表也转图。
                 if (self.doc_cfg.get("render_tables", True)
                         and self.out_cfg.get("generate_images", True)):
-                    built = self._build_table_spec(block.tag)
+                    try:
+                        built = self._build_table_spec(block.tag)
+                    except Exception as exc:
+                        block.render_failure = exc
+                        continue
                     if built is not None and built.get("spec") is not None:
                         block.role = "data_table"
                         block.table_build = built
@@ -3777,7 +3924,7 @@ class HtmlCleaner:
 
         if inline:
             mime_type = mimetypes.guess_type(str(abs_path))[0] or "application/octet-stream"
-            data = abs_path.read_bytes()
+            data = read_bytes_retrying(abs_path)
             if mime_type == "image/png":
                 data = flatten_transparent_png(data)
             data_b64 = base64.b64encode(data).decode("ascii")
@@ -3896,7 +4043,11 @@ def build_front_matter_assets(src: Path, temp_dir: Path, stem: str, cleaner: "Ht
 
     toc_png_path = None
     if want_toc:
-        entries = build_toc_entries(toc_list, cleaner.heading_outline, fm_cfg)
+        try:
+            entries = build_toc_entries(toc_list, cleaner.heading_outline, fm_cfg)
+        except Exception as exc:
+            print(f"  -> TOC image skipped: {exc}")
+            entries = None
         if entries:
             try:
                 import sys
@@ -3910,7 +4061,7 @@ def build_front_matter_assets(src: Path, temp_dir: Path, stem: str, cleaner: "Ht
             except Exception as exc:
                 print(f"  -> TOC image skipped: {exc}")
                 toc_png_path = None
-        else:
+        elif entries is not None:
             print("  -> TOC image skipped: no content TOC entries found")
     return summary_html, toc_png_path
 
@@ -3953,6 +4104,55 @@ def relinked_export_source(src: Path, temp_dir: Path, cfg: dict) -> Optional[Pat
         return None
     print("  [relink] " + " ".join(f"{key}={value}" for key, value in sorted(result["counts"].items())))
     return target if result["changed"] else None
+
+
+def read_bytes_retrying(path: Path, attempts: int = 6, delay: float = 0.5) -> bytes:
+    """读刚写出的文件：安全软件扫描新文件时会短暂独占，稍等重读；一直读不了才抛出。"""
+    import time
+    for attempt in range(attempts):
+        try:
+            return path.read_bytes()
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+
+
+def locate_pages(word: "WordApp", src: Path, failed_blocks: List[dict]) -> Dict[int, List[int]]:
+    """按失败块开头文字在原文档里查找所在页（wdActiveEndPageNumber）。同一句可能也出现在首页摘要里，
+    所以列出全部匹配页（最多 3 处），不猜哪一处；只供定位提示，任何失败都只是不给页码。"""
+    pages: Dict[int, List[int]] = {}
+    doc = None
+    try:
+        doc = word.open_document(src)
+        # 无头模式要先分页，Information 才给出真实页码（同目录页码的读取）；取物理页序，与 Word 状态栏一致
+        try:
+            doc.Repaginate()
+        except Exception:
+            pass
+        for item in failed_blocks:
+            # 导出 HTML 会在中文与数字间多出空格：取开头里最长的一段不含空白的连续文字去找
+            pieces = re.split(r"\s+", (item.get("opening") or "").replace("^", " "))
+            needle = max(pieces, key=len, default="")[:20]
+            if len(needle) < 4:
+                continue
+            found = doc.Content
+            finder = found.Find
+            finder.ClearFormatting()
+            hits: List[int] = []
+            while len(hits) < 3 and finder.Execute(FindText=needle, MatchCase=False, MatchWildcards=False,
+                                                    Forward=True, Wrap=0):
+                page = int(found.Information(3))
+                if page not in hits:
+                    hits.append(page)
+                found.Collapse(0)  # wdCollapseEnd：从这一处之后继续找
+            if hits:
+                pages[item["idx"]] = hits
+    except Exception as exc:
+        print(f"  [warn] could not locate Word page numbers: {exc}")
+    finally:
+        close_document(doc)
+    return pages
 
 
 def _remove_export_leftovers(folder: Path, before: set) -> bool:
@@ -4041,6 +4241,8 @@ def process_one_file(src: Path, out_dir: Path, cleaner: HtmlCleaner, word: WordA
             filtered_html, f"{stem}_wechat_clean_files",
             summary_html=summary_html, toc_png_path=toc_png_path,
         )
+        if cleaner.failed_blocks:
+            cleaner.report_failed_blocks(locate_pages(word, src, cleaner.failed_blocks))
         # 外链资产只有 docx 输出才需要(HTML 走 base64 内联)。不生成 docx 就别复制资产文件夹。
         if cfg["output"].get("generate_docx", False) and clean_result.asset_map:
             copy_used_assets(clean_result.asset_map, out_dir)
@@ -4079,5 +4281,4 @@ def process_summary_file(src: Path, out_dir: Path, extractor: SummaryExtractor, 
             result["html"] = str(html_out)
         return result
     finally:
-        if doc is not None:
-            doc.Close(SaveChanges=WD_DO_NOT_SAVE_CHANGES)
+        close_document(doc)

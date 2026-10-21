@@ -24,7 +24,7 @@ import maintenance
 
 
 HERE = Path(__file__).resolve().parent
-APP_VERSION = "v2.0.0"
+APP_VERSION = "v2.1.0"
 PACKAGES = {"pywin32": "win32com.client", "beautifulsoup4": "bs4", "python-docx": "docx", "Pillow": "PIL.Image"}
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MAX_FILE = 100 * 1024 * 1024
@@ -228,10 +228,89 @@ def kill_word_process(pid):
         subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, creationflags=NO_WINDOW)
 
 
-# 路径内允许空格（如 Program Files）和中文段（如 工具软件），空格后紧跟中文视为
-# 正文开始；宁可多脱敏掉路径后紧跟的英文词，也不能泄露含空格路径的后半段
-_PATH_CHARS = r"(?:[^\s<>:\"|?*\r\n'，。;；]|[ ](?![一-鿿]))"
+# 路径内允许空格（如 Program Files）和中文段（如 工具软件）。空格后紧跟中文一般视为正文开始，
+# 但其后同一词里还有路径分隔符（如 「2026 - 项目甲\报告.docx」）时仍属路径；
+# 宁可多脱敏掉路径后紧跟的英文词，也不能泄露含空格路径的后半段
+_PATH_CHARS = r"(?:[^\s<>:\"|?*\r\n'，。;；]|[ ](?![一-鿿])|[ ](?=[^\s\\/]*[\\/]))"
 PATH_RE = re.compile(r"(?:\\\\\?\\)?[A-Za-z]:[\\/]" + _PATH_CHARS + r"*|\\\\" + _PATH_CHARS + "+")
+# 堆栈与异常里带引号的路径整段脱敏（引号内可含任意空格与中文）
+QUOTED_PATH_RE = re.compile(r"(?P<q>[\"'])(?:\\\\\?\\)?(?:[A-Za-z]:[\\/]|\\\\)(?:(?!(?P=q))[^\r\n])*(?P=q)")
+
+
+# 已知失败形态 → 结果页上的一句原因与做法（按日志与错误信息匹配，先中先用）
+FAILURE_HINTS = (
+    (re.compile(r"Word\.Application\.\w+|0x800706BA|0x800706BE|0x80010108|-2147023174|-2147023170|-2147417848|"
+                r"RPC 服务器不可用|远程过程调用失败|已与其客户端断开"),
+     "Word 在转换途中退出或断开了连接。常见原因是内存加速、清理或安全类软件结束了后台的 Word；"
+     "请暂停这类软件的加速或清理功能后重试。"),
+    (re.compile(r"Could not locate summary content on page 1"),
+     "第 1 页没有找到摘要（投资要点）。请确认报告使用东吴研报模板，且首页的投资要点不是空的。"),
+    (re.compile(r"Invalid class string|无效的类字符串|-2147221005|-2147221164|没有注册类"),
+     "没有找到可用的 Microsoft Word 桌面版，请确认已安装并激活（WPS 不能替代）。"),
+    (re.compile(r"PermissionError|Permission denied|拒绝访问|被另一个程序使用|being used by another process"),
+     "报告文件或临时目录被占用、无权访问。请关闭正在占用它的程序后重试。"),
+)
+
+
+EARLY_QUIT_NOTE = "Word 已提前退出"
+
+
+def failure_hint(error, log=""):
+    """先按最终错误分类（失败的真正原因）；分类不出时再看日志，已容错的告警与进度行（[warn]、->、
+    「Word 已提前退出」）不算原因。"""
+    log = "\n".join(line for line in str(log or "").splitlines()
+                    if EARLY_QUIT_NOTE not in line and "[warn]" not in line and not line.lstrip().startswith("->"))
+    for text in (str(error or ""), log):
+        for pattern, hint in FAILURE_HINTS:
+            if pattern.search(text):
+                return hint
+    return ""
+
+
+# 报告里只列进程映像名，用于判断失败是否与这类常驻软件有关（不列路径、不列其他进程）
+RESIDENT_TOOLS = re.compile(r"^(?:HipsTray|HipsDaemon|360Tray|360sd|ZhuDongFangYu|QQPCTray|QQPCRTP|kxetray|kxescore|"
+                            r"LenovoPcManager\w*|LenovoVantage\w*|LeAppManager|SLBrowser)\.exe$", re.I)
+
+
+def environment_lines():
+    """错误报告的环境段：Word 版本、物理内存占用、Word 进程数、常驻的安全/管家类软件。取不到的项略去。"""
+    lines = []
+    if os.name != "nt":
+        return lines
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, r"Word.Application\CurVer") as key:
+            word = winreg.QueryValue(key, None)
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Office\ClickToRun\Configuration") as key:
+                word += " · " + str(winreg.QueryValueEx(key, "VersionToReport")[0])
+        except OSError:
+            pass
+        lines.append(f"Word：{word}")
+    except OSError:
+        pass
+    try:
+        class MemoryStatus(ctypes.Structure):
+            _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong)] + [
+                (name, ctypes.c_ulonglong) for name in
+                ("total", "avail", "page_total", "page_avail", "virtual_total", "virtual_avail", "extended")]
+        status = MemoryStatus()
+        status.length = ctypes.sizeof(MemoryStatus)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            lines.append(f"内存（生成报告时）：占用 {status.load}%，共 {status.total / 2 ** 30:.0f} GB")
+    except Exception:
+        pass
+    try:
+        listing = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, timeout=10,
+                                 creationflags=NO_WINDOW).stdout.decode("mbcs", "replace")
+        names = [row.split('","')[0].strip('"') for row in listing.splitlines() if row.startswith('"')]
+        lines.append(f"Word 进程数（生成报告时）：{sum(name.lower() == 'winword.exe' for name in names)}")
+        tools = sorted({name for name in names if RESIDENT_TOOLS.match(name)})
+        if tools:
+            lines.append("常驻软件：" + "、".join(tools))
+    except Exception:
+        pass
+    return lines
 
 
 def build_error_report(job, item):
@@ -247,6 +326,7 @@ def build_error_report(job, item):
             if item.get("name"):
                 line = line.replace(item["name"], "<文件>")
                 line = line.replace(Path(item["name"]).stem, "<文件>")
+            line = QUOTED_PATH_RE.sub(lambda match: match["q"] + "<本机路径>" + match["q"], line)
             lines.append(PATH_RE.sub("<本机路径>", line))
         return lines
     import platform
@@ -257,6 +337,7 @@ def build_error_report(job, item):
         f"时间：{time.strftime('%Y-%m-%d %H:%M:%S')}",
         f"模式：{','.join(job.get('modes', []))}　目录：{job.get('toc')}　渲染文末三表：{job.get('forecast_tables')}　标题类型：{job.get('title_type')}",
         f"任务项状态：{item.get('state')}　退出码：{item.get('exit_code')}",
+    ] + environment_lines() + ([f"可能原因：{item['hint']}"] if item.get("hint") else []) + [
         "",
         "## 进度与日志（脱敏后）",
     ]
@@ -1097,10 +1178,20 @@ class Workbench:
                         if process.returncode or not output.is_file():
                             # worker 异常结束时 Word 可能没走到 Quit：按标记收割本实例
                             threading.Thread(target=reap_word_instance, args=(marker,), daemon=True).start()
-                            raise RuntimeError(f"转换进程退出码 {process.returncode}。\n" + (log_text[-12000:] or "转换没有生成结果。"))
+                            # 日志已逐行进了结果页，这里只留退出码与最后一行（通常是异常类型与信息），不再重复整段日志
+                            last = next((line.strip() for line in reversed(log_text.splitlines()) if line.strip()), "")
+                            raise RuntimeError(f"转换进程退出码 {process.returncode}。" + (f"\n{last}" if last else "转换没有生成结果。"))
                         html = output.read_text(encoding="utf-8")
-                        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
                         warnings = [line for line in log_text.splitlines() if any(w in line.lower() for w in ("warn", "skipped", "fallback", "跳过"))]
+                        try:
+                            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                            if not isinstance(metadata, dict):
+                                raise ValueError("not an object")
+                        except (OSError, ValueError):
+                            # 元数据只供标题与自检提示：读不出时正文照常交付，标题留空由用户填写
+                            metadata = {}
+                            if not any("标题等信息未能写出" in line for line in warnings):
+                                warnings.append("[warn] 未能读取标题等信息：标题请手动填写，自检与文末三表的处理情况无法显示")
                     with self.lock:
                         main_title = metadata.get("main_title", "")
                         subtitle = metadata.get("subtitle", metadata.get("title", ""))
@@ -1124,7 +1215,7 @@ class Workbench:
                 except Exception as exc:
                     with self.lock:
                         item.pop("content", None)
-                        item.update(state="error", error=str(exc))
+                        item.update(state="error", error=str(exc), hint=failure_hint(exc, "\n".join(item.get("log", []))))
         finally:
             with self.lock:
                 for item in job["items"]:
@@ -1380,7 +1471,9 @@ class Handler(BaseHTTPRequestHandler):
                     if item.get("state") != "error":
                         self.send(404, {"error": "该报告没有错误信息。"})
                         return
-                    report = build_error_report(job, item)
+                    job, item = dict(job), dict(item, log=list(item.get("log", [])))
+                # 环境段要查进程列表，在锁外生成，不阻塞轮询与转换
+                report = build_error_report(job, item)
                 self.send(200, report, "text/plain; charset=utf-8")
             elif route.startswith("result/"):
                 _, job_id, index = route.split("/")
