@@ -20,10 +20,16 @@ if ($InstallDependencies) {
 if (-not (Test-Path -LiteralPath $buildPython)) {
     throw 'Run build.ps1 -InstallDependencies first.'
 }
+# EXE 按版本命名（v1.1.0 → 报告转公众号v1_1.exe，v1.1.0 beta 2 → 报告转公众号v1_1_beta2.exe，补丁号非零时追加 _N），旧版本文件不被覆盖
+$appSource = Get-Content -LiteralPath (Join-Path $projectDirectory 'app.py') -Raw -Encoding utf8
+if ($appSource -notmatch 'APP_VERSION = "v(\d+)\.(\d+)\.(\d+)(?: beta (\d+))?"') { throw 'APP_VERSION not found in app.py.' }
+$versionTag = "v$($Matches[1])_$($Matches[2])" + $(if ($Matches[3] -ne '0') { "_$($Matches[3])" } else { '' }) + $(if ($Matches[4]) { "_beta$($Matches[4])" } else { '' })
+$exeName = "报告转公众号$versionTag"
+$env:WORKBENCH_EXE_NAME = $exeName
 & $buildPython -m PyInstaller --noconfirm --distpath (Join-Path $workspaceDirectory 'release') --workpath (Join-Path $workspaceDirectory '.build-output') (Join-Path $projectDirectory 'workbench.spec')
 if ($LASTEXITCODE -ne 0) { throw 'Build failed. If the EXE is running, close the workbench before rebuilding.' }
-$releaseExe = Join-Path $workspaceDirectory 'release\报告转公众号.exe'
-$fixedEntry = Join-Path $workspaceDirectory '报告转公众号.exe'
+$releaseExe = Join-Path $workspaceDirectory "release\$exeName.exe"
+$fixedEntry = Join-Path $workspaceDirectory "$exeName.exe"
 # 固定分发入口与 release 保持同一文件（README 的双副本契约）
 Copy-Item -LiteralPath $releaseExe -Destination $fixedEntry -Force
 Get-FileHash -Algorithm SHA256 -LiteralPath $releaseExe, $fixedEntry

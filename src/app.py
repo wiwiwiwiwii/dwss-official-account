@@ -4,6 +4,7 @@ import argparse
 import ctypes
 import importlib
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -19,9 +20,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 import webbrowser
 
+import maintenance
+
 
 HERE = Path(__file__).resolve().parent
-APP_VERSION = "v1.1.0"
+APP_VERSION = "v2.0.0"
 PACKAGES = {"pywin32": "win32com.client", "beautifulsoup4": "bs4", "python-docx": "docx", "Pillow": "PIL.Image"}
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MAX_FILE = 100 * 1024 * 1024
@@ -263,6 +266,7 @@ def build_error_report(job, item):
 
 
 MAX_ZIP_ENTRIES = 5000
+CHART_PART = re.compile(r"word/charts/chart\d+\.xml")
 
 
 CENTRAL_HEADER_SIZE = 46
@@ -322,7 +326,10 @@ def zip_entry_count(path):
 def docx_stats(path):
     """预估“预计完成时间”用的轻量特征（仅 .docx；失败返回 None，前端只显示已运行时长）。
 
-    设有 zip 守卫（条目数、document.xml 解压尺寸）防异常压缩比拖垮内存；
+    全部取自压缩包，不调用 Word：图表数与其中「本地图表」数（数据不是链接到外部工作簿的图表：
+    内嵌工作簿或没有数据）、内嵌对象数、docProps/app.xml 的页数，以及摘要的字数与它是否在摘要内容控件里
+    （eta_summary_extent）。各步用哪些特征由拟合挑选（tests/perf-v117/refit_eta.py）。
+    设有 zip 守卫（条目数、document.xml 与小部件的解压尺寸）防异常压缩比拖垮内存；
     调用方须在全局锁外执行本函数。"""
     try:
         import zipfile
@@ -342,12 +349,427 @@ def docx_stats(path):
             # 按 ZipInfo 读而不是按名字读：同名重复条目时 read(name) 取的是最后一个，
             # 会绕过上面对第一个条目做的解压尺寸守卫
             xml = ElementTree.fromstring(archive.read(document))
+            first = {}
+            for info in infos:
+                first.setdefault(info.filename, info)
+
+            def small(name):
+                info = first.get(name)
+                return archive.read(info) if info is not None and info.file_size <= 1024 * 1024 else b""
+
+            charts = [name for name in first if CHART_PART.fullmatch(name)]
+            # 链接外部工作簿的图表：其关系文件里有 TargetMode="External" 的关系
+            linked = sum(1 for name in charts
+                         if b'TargetMode="External"' in small(name.replace("charts/", "charts/_rels/", 1) + ".rels"))
+            pages = re.search(rb"<Pages>(\d{1,6})</Pages>", small("docProps/app.xml"))
         ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        summary_chars, summary_control = eta_summary_extent(xml)
         return {"size": path.stat().st_size, "media_count": len(media), "media_bytes": media_bytes,
+                "summary_chars": summary_chars, "summary_control": summary_control,
                 "paragraphs": len(list(xml.iter(ns + "p"))), "tables": len(list(xml.iter(ns + "tbl"))),
-                "chars": sum(len(t.text or "") for t in xml.iter(ns + "t"))}
+                "chars": sum(len(t.text or "") for t in xml.iter(ns + "t")),
+                "charts": len(charts), "charts_local": len(charts) - linked,
+                "embeddings": sum(1 for name in first if name.startswith("word/embeddings/")),
+                "pages": int(pages.group(1)) if pages else None}
     except Exception:
         return None
+
+
+# ---- 预计完成时间（ETA）：各步工作量模型 × 本机性能系数，转换中按已完成步骤向先验收缩修正 ----
+# 算法见 tests/perf-v115/eta-quality.md；工作量系数、残差分位点、冷启动系数与步内外推开关由 tests/perf-v117/refit_eta.py
+# 按批重拟合（tests/perf-v117/eta-refit.md），refit_apply.py 写进下面的常量。回放脚本直接调用 safe_item_eta / eta_learn / docx_stats。
+LEGACY_ETA_PATH = SETTINGS_PATH.with_name("eta.json")   # beta 4 及以前写在程序外的系数文件，启动时删除
+ETA_STREAM = "eta"           # 系数记录写在当前 EXE 的 NTFS 备用数据流 <exe>:eta；源码运行只记在内存
+ETA_STREAM_LIMIT = 4096      # 数据流超过这个字节数视为损坏，按无记录处理
+ETA_HISTORY = 10             # 保留最近几次转换的本机系数
+ETA_K_BOUNDS = (0.2, 20.0)   # 本机系数的取值范围（超出的记录视为损坏）
+ETA_RECENCY = 0.7            # 起算系数取加权中位数，每早一次的记录权重乘这个数
+ETA_COLD_K = 0.9771          # 没有记录时的起算系数：工作量模型拟合数据里本机无负载各次系数的中位数
+ETA_SHRINK = 40.0            # 在线修正时先验折合多少秒工作量的观测（n₀）
+ETA_OUTLIER = 3.0            # 学习时排除与起算系数相差超过这个倍数的步骤
+ETA_TIER_GROWTH = 1.3        # 当前步越过 P99 档后，每档再乘这个数
+ETA_TIER_MARGIN = 0.5        # 离一档结束不到这么多秒就换下一档；预计值也不低于「已运行 + 这么多秒」
+ETA_SUMMARY_CONTROLS = ("报告摘要", "AUTO_SAVE_Summary")   # 同 configs/summary.json 的 control_name_keywords
+# 步内进度：worker 在摘要一步第一遍逐段判断结束时打印 `[SUB] summary 0/<总字数>`，第二遍逐段渲染每完成约 5% 字数
+# 打印 `[SUB] summary <已渲染字数>/<总字数>`。按字数占比外推本步时长：已到 ETA_SUB_TRUST 的占比时完全按外推，
+# 之前与模型中位数按占比几何加权，再分档。默认关闭：摘要提速后这一步只剩几秒，训练批次回放开与关几乎无差别，
+# beta 6 开启时上修更多（tests/perf-v116/eta-quality.md、tests/perf-v117/eta-refit.md）。
+ETA_SUB_LINE = re.compile(r"^\[SUB\] (summary) (\d{1,9})/(\d{1,9})\s*$")
+ETA_SUB_ROLES = frozenset(("summary", "summary_only"))   # [SUB] summary 所在步骤的类型
+ETA_SUB_TRUST = 0.2
+ETA_SUB_ENABLED = False
+# 工作量模型：本机（Core Ultra 7 258V 笔记本，接电，无负载）各步秒数，log W = b0 + Σ b·log1p(特征)。
+# 数据：tests/batch-v117/survey.jsonl 的训练批次（摘要按格式分段渲染、正文导出前本地图表改为外链之后的实跑）。
+# toc 与 toc_chars 沿用 beta 6：toc 代表 runs.json 与 batch-v115 两批运行条件之差，toc_chars 为指定点评模式含目录时的
+# 目录图耗时（tests/perf-v116/eta-quality.md）；新数据全是工作台默认（自动、含目录），先扣除它们再拟合其余部分。
+ETA_WORKLOAD = {
+    "pre": (-1.1251, (('toc', 0.2329),)),
+    "word": (0.18, (('toc', 0.826),)),
+    "load": (-4.0, ()),
+    "summary": (0.6628, (('toc', 0.9793),)),
+    "summary_only": (0.8917, (('toc', 0.5703), ('toc_chars', 0.2187))),
+    "body": (-0.787, (('pages', 0.3647), ('charts', 0.3915), ('toc', 1.9005))),
+    "weekly": (1.554, ()),
+    "merge": (-3.413, (('pages', 0.2727), ('charts', 0.505))),
+}
+# 各步类型「实际 ÷ 模型」的残差分位点（按报告留一），列依次对应 ETA_LEVELS
+ETA_LEVELS = (0.5, 0.65, 0.8, 0.9, 0.95, 0.99)
+ETA_RESIDUAL = {
+    "pre": (1.0, 1.056, 1.127, 1.199, 1.262, 1.39),
+    "word": (1.0, 1.039, 1.088, 1.137, 1.179, 1.262),
+    "load": (1.0, 1.5, 2.0, 3.0, 5.0, 10.0),
+    "summary": (1.007, 1.08, 1.173, 1.271, 1.358, 1.537),
+    "summary_only": (1.007, 1.072, 1.155, 1.242, 1.318, 1.474),
+    "body": (1.004, 1.053, 1.113, 1.174, 1.227, 1.334),
+    "weekly": (1.0, 1.043, 1.096, 1.15, 1.196, 1.289),
+    "merge": (0.983, 1.126, 1.324, 1.547, 1.759, 2.239),
+}
+ETA_TIER_LEVELS = (0.5, 0.65, 0.8, 0.9, 0.95, 0.99)   # 当前步超时时依次取用的档（之后每档 ×ETA_TIER_GROWTH）
+ETA_HIGH_LEVEL = 0.95        # 范围上限：当前步取这一分位的档（主数字已到这一档时取下一档）
+ETA_FUTURE_HIGH_LEVEL = 0.8  # 范围上限：后续各步取这一分位
+ETA_ROLE_TYPE = {"forecast": "body"}    # 点评附三表多跑的那一遍就是正文管线
+ETA_CONVERT = frozenset(("summary", "summary_only", "body", "weekly", "merge"))   # 参与本机系数的步骤类型
+# 进度条段内曲线 f(x)，x = 本段已耗时 ÷ 本段预估：拐点前线性（按时推进时进度≈耗时比例），拐点后先以
+# 一阶连续的指数软着陆到 MID，再以长尺度指数缓慢逼近 CAP（严重超时也持续可见地爬升，永不触顶）
+ETA_BAR_KNEE = 0.85
+ETA_BAR_SOFT = 0.12              # 软着陆段的尺度＝幅度，故拐点处斜率为 1
+ETA_BAR_MID = 0.86
+ETA_BAR_CAP = 0.97
+ETA_BAR_TAIL = 5.0               # 末段指数的尺度（以 x 计）
+
+
+def eta_summary_extent(root):
+    """（摘要字数, 是否在摘要内容控件里 1/0），root 为 document.xml 的根元素。
+
+    与 converter.SummaryExtractor 找摘要的顺序一致：先找标题或标记含 ETA_SUMMARY_CONTROLS 的内容控件
+    （跳过只显示占位文字的），取其中的字数；找不到时转换器退回第 1 页，这里取 Word 上次保存时记下的
+    第一个分页处（lastRenderedPageBreak 或手动分页符）之前的字数，没有分页记录时取全文字数。"""
+    ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    for sdt in root.iter(ns + "sdt"):
+        props = sdt.find(ns + "sdtPr")
+        content = sdt.find(ns + "sdtContent")
+        if props is None or content is None or props.find(ns + "showingPlcHdr") is not None:
+            continue
+        label = " ".join(child.get(ns + "val") or "" for child in props if child.tag in (ns + "alias", ns + "tag"))
+        label = re.sub(r"\s+", " ", label)
+        if any(key in label for key in ETA_SUMMARY_CONTROLS):
+            return sum(len(t.text or "") for t in content.iter(ns + "t")), 1
+    chars = 0
+    body = root.find(ns + "body")
+    for element in (body.iter() if body is not None else ()):
+        if element.tag == ns + "lastRenderedPageBreak" or (element.tag == ns + "br" and element.get(ns + "type") == "page"):
+            break
+        if element.tag == ns + "t":
+            chars += len(element.text or "")
+    return chars, 0
+
+
+def eta_features(stats, toc=True):
+    """工作量模型的特征（docx_stats 的结果换算）；拿不到或取值异常返回 None（只显示已运行）。"""
+    if not isinstance(stats, dict):
+        return None
+
+    def number(key, required=False):
+        value = stats.get(key)
+        if value is None and not required:
+            return 0.0
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise ValueError(key)
+        return float(value)
+
+    try:
+        size, media_bytes, chars = number("size", True), number("media_bytes", True), number("chars", True)
+        return {"text_mb": max(0.0, size - media_bytes) / 1e6, "media": number("media_count"),
+                "media_mb": media_bytes / 1e6, "paragraphs": number("paragraphs"), "tables": number("tables"),
+                "chars": chars / 1e4, "pages": number("pages"), "charts": number("charts"),
+                "charts_local": number("charts_local"), "embeddings": number("embeddings"),
+                "summary_chars": number("summary_chars") / 100, "summary_control": number("summary_control"),
+                "toc": 1.0 if toc else 0.0, "toc_chars": chars / 1e4 if toc else 0.0}
+    except ValueError:
+        return None
+
+
+def eta_roles(modes):
+    """各段的步骤：段 0 = 任务开始→[STEP 1]（复制、启动 worker、识别），段 1 启动 Word，段 2 载入版式，
+    之后每个模式一段（顺序同 convert_worker.MODES），点评附三表多一段正文管线，末段合并写出。"""
+    modes = list(modes or [])
+    summary = "summary" if "body" in modes else "summary_only"
+    return (["pre", "word", "load"] + [summary if m == "summary" else m for m in ("summary", "body", "weekly") if m in modes]
+            + (["forecast"] if "forecast" in modes else []) + ["merge"])
+
+
+def eta_workload(role, features):
+    """第 role 步在本机无负载时的预估秒数 W_s(x)。"""
+    if role == "forecast":      # 三表那一遍按正文管线转换，但不出目录图
+        features = dict(features, toc=0.0, toc_chars=0.0)
+    intercept, coefs = ETA_WORKLOAD[ETA_ROLE_TYPE.get(role, role)]
+    value = intercept + sum(b * math.log1p(features[name]) for name, b in coefs)
+    return min(3600.0, max(0.01, math.exp(value)))
+
+
+def eta_quantile(role, level):
+    """第 role 步类型「实际 ÷ 模型」的 level 分位点（level 须是 ETA_LEVELS 之一）。"""
+    return ETA_RESIDUAL[ETA_ROLE_TYPE.get(role, role)][ETA_LEVELS.index(level)]
+
+
+def eta_empty_store():
+    return []
+
+
+def eta_prior_k(store):
+    """起算系数 k₀：最近几次本机系数的加权中位数（越近权重越大）；没有记录时为 ETA_COLD_K。"""
+    values = [v for v in store or [] if isinstance(v, float) and ETA_K_BOUNDS[0] <= v <= ETA_K_BOUNDS[1]]
+    if not values:
+        return ETA_COLD_K
+    weighted = sorted((v, ETA_RECENCY ** age) for age, v in enumerate(reversed(values)))
+    half, acc = sum(w for _, w in weighted) / 2, 0.0
+    for value, weight in weighted:
+        acc += weight
+        if acc >= half:
+            return value
+    return weighted[-1][0]
+
+
+def eta_arrivals(item, started):
+    """[STEP i] 的到达时刻（自任务开始计）。按步号取首次到达：自动识别要用 Word 时总步数会中途改变，
+    步号不变。"""
+    marks = {}
+    for step, _total, moment in item.get("step_times") or []:
+        marks.setdefault(int(step), float(moment) - started)
+    arrivals = []
+    while len(arrivals) + 1 in marks:
+        arrivals.append(max(marks[len(arrivals) + 1], arrivals[-1] if arrivals else 0.0))
+    return arrivals
+
+
+def eta_current_k(k0, roles, works, bounds, partial=None):
+    """按已完成转换步的工作量加权向先验收缩：log k = (n₀·log k₀ + Σ W_j·log(T_j/W_j)) / (n₀ + Σ W_j)。
+    partial =（当前步序号, 已完成占比 f, 外推的本步时长 D）：当前步按 f·W 的权重计入 D / W（步内进度）。"""
+    num, den = ETA_SHRINK * math.log(k0), ETA_SHRINK
+    observed = [(j, 1.0, max(bounds[j + 1] - bounds[j], 0.01)) for j in range(len(bounds) - 1)]
+    if partial is not None:
+        observed.append(partial)
+    for j, share, spent in observed:
+        if ETA_ROLE_TYPE.get(roles[j], roles[j]) in ETA_CONVERT:
+            num += share * works[j] * math.log(spent / works[j])
+            den += share * works[j]
+    low, high = ETA_K_BOUNDS
+    return min(high, max(low, math.exp(num / den)))
+
+
+def eta_tiers(base, role, spent):
+    """当前步的预计时长：按残差分位点分档（ETA_TIER_LEVELS，之后每档 ×ETA_TIER_GROWTH），取第一个比已耗时
+    长出 ETA_TIER_MARGIN 秒以上的档——档与档之间预计值不随时钟走。返回（这一档, 范围上限用的档）。"""
+    tiers = [base * eta_quantile(role, level) for level in ETA_TIER_LEVELS]
+    while tiers[-1] <= spent + ETA_TIER_MARGIN:
+        tiers.append(tiers[-1] * ETA_TIER_GROWTH)
+    index = next(i for i, t in enumerate(tiers) if t > spent + ETA_TIER_MARGIN)
+    upper = tiers[index + 1] if index + 1 < len(tiers) else tiers[index] * ETA_TIER_GROWTH
+    high = base * eta_quantile(role, ETA_HIGH_LEVEL)
+    return tiers[index], (high if high > tiers[index] else upper)
+
+
+def eta_record_sub(item, match, moment):
+    """记下一行 [SUB]（ETA_SUB_LINE 的匹配）：当前 [STEP] 步号、总字数、第一遍结束（0/总字数）时刻、最近一次的已完成字数与时刻。
+    换了步骤或总字数就重新开始；已完成字数只增不减。调用方持有锁。"""
+    done, total = int(match.group(2)), int(match.group(3))
+    step = int((item.get("progress") or {}).get("step") or 0)
+    if total <= 0 or done > total:
+        return
+    sub = item.get("sub_progress")
+    if not isinstance(sub, dict) or sub.get("step") != step or sub.get("total") != total:
+        sub = item["sub_progress"] = {"step": step, "total": total, "zero": None, "done": 0, "at": None}
+    if done == 0:
+        sub["zero"] = sub["zero"] if sub["zero"] is not None else moment
+    elif done >= sub["done"]:
+        sub["done"], sub["at"] = done, moment
+
+
+def eta_sub_point(item, started):
+    """当前步内进度（步号, 第一遍结束时刻或 None, 已完成占比, 这一占比的时刻），时刻自任务开始计；没有返回 None。"""
+    sub = item.get("sub_progress")
+    if not isinstance(sub, dict) or not sub.get("at") or not sub.get("total"):
+        return None
+    zero = sub.get("zero")
+    return (int(sub["step"]), None if zero is None else float(zero) - started,
+            min(1.0, sub["done"] / sub["total"]), float(sub["at"]) - started)
+
+
+def eta_sub_extrapolate(sub, current, role, start):
+    """按当前步的 [SUB] 进度外推本步时长：（外推时长 D, 已完成占比 f）；不适用返回 None。
+    第一遍结束前的部分按实耗计，第二遍按字数占比线性外推：D = (t₀ − 本步开始) + (t − t₀) / f。"""
+    if sub is None or sub[0] != current or ETA_ROLE_TYPE.get(role, role) not in ETA_SUB_ROLES:
+        return None
+    _, zero, share, moment = sub
+    origin = zero if zero is not None and start <= zero <= moment else start
+    if share <= 0 or moment <= origin:
+        return None
+    return (origin - start) + (moment - origin) / share, share
+
+
+def eta_estimate(k0, roles, works, arrivals, elapsed, sub=None):
+    """返回（预计总耗时 P50, 范围上限, 进度条原始值 0~1），都自任务开始计。
+
+    已完成各步按实际耗时；本机系数 k 由已完成的转换步向起算系数 k₀ 收缩更新（启动类步骤不参与：
+    实测 Word 启动快慢与后续转换无关）；当前步超出预估时归因于这一步工作量估低，不调 k、不放大后续
+    步骤，按残差分位点分档（eta_tiers）；未开始各步按 k × W × P50。
+    范围上限：当前步取 ETA_HIGH_LEVEL 分位的档（主数字已到这一档时取下一档），后续各步取 ETA_FUTURE_HIGH_LEVEL。
+    进度条：各步水位按本报告起算时的各步预估（k₀ × W × P50）的累计占比，不随修正变化；
+    步内为水位 + 占比 × f(已耗时 ÷ 本步预估)，f 见 eta_bar_curve，封顶在 1 之下，完成由页面推到 100%。"""
+    last = len(works) - 1
+    arrivals = [a for a in arrivals if a <= elapsed][:last]
+    bounds = [0.0] + arrivals
+    current = len(arrivals)
+    start = bounds[-1]
+    spent = max(0.0, elapsed - start)
+    if sub is not None and sub[3] > elapsed:
+        sub = None
+    extrapolated = eta_sub_extrapolate(sub, current, roles[current], start) if ETA_SUB_ENABLED else None
+    partial = (current, extrapolated[1], extrapolated[0]) if extrapolated else None
+    k = eta_current_k(k0, roles, works, bounds, partial)
+    base = k * works[current]
+    tier, high_tier = eta_tiers(base, roles[current], spent)
+    if extrapolated:
+        # 步内进度：按字数占比 f 把本步的模型中位数几何加权地换成外推值（f ≥ ETA_SUB_TRUST 时完全按外推），
+        # 再以加权结果为中位数分档。加权的两端在两行 [SUB] 之间都不变，档与档之间预计值不随时钟走
+        span, share = extrapolated
+        weight = min(1.0, share / ETA_SUB_TRUST)
+        median = math.exp((1 - weight) * math.log(base * eta_quantile(roles[current], 0.5)) + weight * math.log(span))
+        tier, high_tier = eta_tiers(median / eta_quantile(roles[current], 0.5), roles[current], spent)
+    future = sum(k * works[j] * eta_quantile(roles[j], 0.5) for j in range(current + 1, last + 1))
+    future_high = sum(k * works[j] * eta_quantile(roles[j], ETA_FUTURE_HIGH_LEVEL) for j in range(current + 1, last + 1))
+    total = max(start + tier + future, elapsed + ETA_TIER_MARGIN)
+    high = max(start + high_tier + future_high, total)
+    plan = [k0 * w * eta_quantile(r, 0.5) for r, w in zip(roles, works)]
+    whole = sum(plan)
+    level = sum(plan[:current]) / whole
+    expected = median if extrapolated else base * eta_quantile(roles[current], 0.5)
+    climb = plan[current] / whole * eta_bar_curve(spent / expected)
+    return total, high, min(level + climb, 0.999)
+
+
+def eta_bar_curve(x):
+    """段内进度 f(x) ∈ [0, ETA_BAR_CAP)：x ≤ 拐点时 f = x；之后一阶连续地转入两段指数。"""
+    knee, soft, mid = ETA_BAR_KNEE, ETA_BAR_SOFT, ETA_BAR_MID
+    if x <= knee:
+        return max(0.0, x)
+    turn = knee - soft * math.log(1 - (mid - knee) / soft)     # 软着陆段到达 MID 的 x
+    if x <= turn:
+        return knee + soft * (1 - math.exp(-(x - knee) / soft))
+    return mid + (ETA_BAR_CAP - mid) * (1 - math.exp(-(x - turn) / ETA_BAR_TAIL))
+
+
+def eta_job_plan(item, job_modes=None):
+    """（各段步骤, 各段工作量）；无法预估返回 None。[modes] 行到达前退回任务选定的模式。
+    自动模式下点评框架不出目录图（convert_worker.apply_detection 把目录开关限定在有正文的模式），
+    「仅摘要」一步不计目录图（toc_chars 取 0）；指定点评模式含目录时才在这一步出目录图。toc 本身与其余各步
+    同口径，代表拟合数据两批运行条件之差（见 ETA_WORKLOAD 的注释），照常取任务的目录开关。"""
+    modes = item.get("detected_modes") or ([m for m in job_modes or [] if m != AUTO_MODE] or None)
+    features = eta_features(item.get("stats"), item.get("toc", True))
+    if not modes or features is None:
+        return None
+    roles = eta_roles(modes)
+    no_toc = dict(features, toc_chars=0.0)
+    auto = AUTO_MODE in (job_modes or ())
+    return roles, [eta_workload(role, no_toc if auto and role == "summary_only" else features) for role in roles]
+
+
+def safe_item_eta(item, now, store, job_modes=None):
+    """轮询接口用的 item_eta：预估是附带功能，任何异常都只放弃这次预估（页面保持已显示的进度，
+    尚无进度时显示不确定态），不得让 api/jobs 报错——那会让结果页收不到进度和结果。"""
+    try:
+        return item_eta(item, now, store, job_modes)
+    except Exception:
+        return None, None, None
+
+
+def item_eta(item, now, store, job_modes=None):
+    """结果页信息条用的（预计总耗时整秒, 进度条原始值 0~1, 范围上限整秒）；无法预估时全为 None
+    （页面只显示已运行；进度条尚无进度时为不确定态，已有进度时保持已显示的值）。时刻全部取服务端时钟。"""
+    plan = eta_job_plan(item, job_modes)
+    started = item.get("started")
+    if not plan or not started:
+        return None, None, None
+    roles, works = plan
+    total, high, progress = eta_estimate(eta_prior_k(store), roles, works, eta_arrivals(item, started),
+                                         max(0.0, now - started), eta_sub_point(item, started))
+    return math.ceil(total), round(progress, 4), math.ceil(high)
+
+
+def eta_learn(store, item, finished_at, job_modes=None):
+    """一次成功转换后的本机系数（返回新的记录列表，只留最近 ETA_HISTORY 次）；无法计算时原样返回。
+
+    本次系数 = 各转换步「实际 ÷ 工作量」按工作量加权的几何均值；与起算系数相差超过 ETA_OUTLIER 倍的
+    步骤不参与（一份报告特异的步骤不带偏本机系数）。全部步骤都偏向同一侧时视为本机变了，按截到
+    ETA_OUTLIER 倍计入，几次之内跟上。"""
+    plan = eta_job_plan(item, job_modes)
+    started = item.get("started")
+    if not plan or not started or not isinstance(finished_at, (int, float)):
+        return store
+    roles, works = plan
+    arrivals = eta_arrivals(item, started)
+    if len(arrivals) != len(roles) - 1:
+        return store
+    bounds = [0.0] + arrivals + [max(finished_at - started, arrivals[-1] if arrivals else 0.0)]
+    k0 = eta_prior_k(store)
+    observed = [(works[j], max(bounds[j + 1] - bounds[j], 0.01) / works[j]) for j in range(len(roles))
+                if ETA_ROLE_TYPE.get(roles[j], roles[j]) in ETA_CONVERT]
+    kept = [(w, r) for w, r in observed if abs(math.log(r / k0)) <= math.log(ETA_OUTLIER)]
+    if not kept and observed and (all(r > k0 for _, r in observed) or all(r < k0 for _, r in observed)):
+        kept = [(w, min(k0 * ETA_OUTLIER, max(k0 / ETA_OUTLIER, r))) for w, r in observed]
+    if not kept:
+        return store
+    low, high = ETA_K_BOUNDS
+    k = math.exp(sum(w * math.log(r) for w, r in kept) / sum(w for w, _ in kept))
+    return (list(store or []) + [round(min(high, max(low, k)), 4)])[-ETA_HISTORY:]
+
+
+def eta_stream_path():
+    """打包版：当前 EXE 的备用数据流；源码运行返回 None（绝不写 python.exe 的数据流）。"""
+    if not getattr(sys, "frozen", False):
+        return None
+    return sys.executable + ":" + ETA_STREAM
+
+
+def load_eta_store():
+    path = eta_stream_path()
+    if not path:
+        return []
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read(ETA_STREAM_LIMIT + 1)
+        if len(raw) > ETA_STREAM_LIMIT:
+            return []
+        data = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return []
+    values = data.get("k") if isinstance(data, dict) else None
+    if not isinstance(values, list):
+        return []
+    low, high = ETA_K_BOUNDS
+    return [float(v) for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(v) and low <= v <= high][-ETA_HISTORY:]
+
+
+def save_eta_store(store):
+    path = eta_stream_path()
+    if not path:
+        return
+    try:
+        payload = json.dumps({"k": [round(float(v), 4) for v in list(store)[-ETA_HISTORY:]]}).encode("utf-8")
+        with open(path, "wb") as handle:
+            handle.write(payload)
+    except Exception:
+        # 附带功能：EXE 所在盘不支持数据流、只读或被占用时，只影响下一次的起算系数
+        pass
+
+
+def remove_legacy_eta_file():
+    """删除 beta 4 及以前写在 %APPDATA% 的 eta.json（只删这一个文件，settings.json 保留）。"""
+    try:
+        LEGACY_ETA_PATH.unlink()
+    except OSError:
+        pass
 
 
 def python_exe():
@@ -413,6 +835,7 @@ class Workbench:
         self.closing = False
         self.server = None
         self.update = None      # 后台查到的新版本；查不到或已是最新时保持 None
+        self.eta_store = None   # 最近几次的本机性能系数（打包版存于 EXE 的备用数据流），首次用到时载入
 
     def check_dependencies(self):
         with self.lock:
@@ -601,8 +1024,8 @@ class Workbench:
                         item.pop("content", None)
                         item.update(state="cancelled")
                         continue
-                    item.update(state="running", started=time.time(), log=[], exit_code=None,
-                                progress={"step": 0, "total": 0, "text": "准备文件"})
+                    item.update(state="running", started=time.time(), log=[], exit_code=None, step_times=[],
+                                progress={"step": 0, "total": 0, "text": "准备文件"}, toc=bool(job["toc"]))
                 try:
                     # ignore_cleanup_errors：取消/超时刚杀掉 Word 时文件可能仍被短暂占用，
                     # 残留目录由下次启动的 clean_orphans 收走，不把取消变成报错
@@ -642,16 +1065,20 @@ class Workbench:
                         if job["forecast_tables"]:
                             args.append("--forecast-tables")
                         marker = secrets.token_hex(8)
-                        stats = docx_stats(source) if source.suffix.lower() == ".docx" else None
-                        with self.lock:
-                            item["stats"] = stats
                         with log_path.open("w", encoding="utf-8") as log:
                             process = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT,
                                                        env=dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1",
                                                                 WECHAT_WORKBENCH_MARKER=marker),
                                                        cwd=str(HERE), creationflags=NO_WINDOW)
+                            # 预估特征在 worker 启动之后读：与 worker 启动并行，不推迟转换；日志从头读，不会漏行
+                            stats = docx_stats(source) if source.suffix.lower() == ".docx" else None
+                            with self.lock:
+                                item["stats"] = stats
                             stop_reason = self.follow_log(job, item, log_path, process, marker)
-                        log_text = log_path.read_text(encoding="utf-8", errors="replace")
+                        finished_at = time.time()
+                        # 步内进度行（[SUB]）只供 ETA，不进结果页的日志与报错
+                        log_text = "".join(line for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines(True)
+                                           if not ETA_SUB_LINE.match(line))
                         with self.lock:
                             item["exit_code"] = process.returncode
                         if stop_reason == "cancel":
@@ -693,6 +1120,7 @@ class Workbench:
                                     url="result/" + job["id"] + "/" + str(job["items"].index(item)))
                         if warnings:
                             item["warnings"] = warnings
+                    self.learn_eta(job, item, finished_at)
                 except Exception as exc:
                     with self.lock:
                         item.pop("content", None)
@@ -711,6 +1139,29 @@ class Workbench:
                 job["state"] = "done"
                 job["expires"] = time.monotonic() + 7200
 
+    def eta_memory(self):
+        with self.lock:
+            # 读失败也缓存空记忆：之后的轮询不再反复读文件
+            if self.eta_store is None:
+                try:
+                    self.eta_store = load_eta_store()
+                except Exception:
+                    self.eta_store = []
+            return self.eta_store
+
+    def learn_eta(self, job, item, finished_at):
+        """成功转换后按各步实际耗时算本次的本机性能系数，追加到记录（打包版写回 EXE 的备用数据流）。
+
+        附带功能：此刻报告已标记完成，任何异常都不得把它改判为失败。"""
+        try:
+            store = self.eta_memory()
+            with self.lock:
+                self.eta_store = eta_learn(store, item, finished_at, job.get("modes"))
+                snapshot = list(self.eta_store)
+            save_eta_store(snapshot)
+        except Exception:
+            pass
+
     def record_lines(self, item, lines):
         with self.lock:
             log = item.setdefault("log", [])
@@ -718,10 +1169,18 @@ class Workbench:
                 line = raw.rstrip()
                 if not line:
                     continue
+                sub = ETA_SUB_LINE.match(line)
+                if sub:
+                    # 步内进度：不进日志，只记到 item 供 ETA（到达时刻同样取服务端时钟）
+                    eta_record_sub(item, sub, time.time())
+                    continue
                 log.append(line)
                 step = STEP_LINE.match(line)
                 if step:
                     item["progress"] = {"step": int(step.group(1)), "total": int(step.group(2)), "text": step.group(3)}
+                    # 到达时刻取服务端时钟：ETA 按已完成步骤的实际耗时修正，不依赖页面所在机器的时钟
+                    item.setdefault("step_times", []).append((int(step.group(1)), int(step.group(2)), time.time()))
+                    del item["step_times"][:-32]
                 elif line.startswith("[modes] "):
                     item["detected_modes"] = line[len("[modes] "):].split(",")
             del log[:-200]
@@ -883,11 +1342,20 @@ class Handler(BaseHTTPRequestHandler):
                                "last_job": {"id": last["id"], "state": last["state"]} if last else None}
                 self.send(200, payload)
             elif route.startswith("api/jobs/"):
+                try:
+                    store = self.app.eta_memory()
+                except Exception:
+                    store = []
                 with self.app.lock:
                     job = self.app.jobs.get(route.split("/")[-1])
-                    payload = None if not job else {"id": job["id"], "state": job["state"], "now": time.time(), "modes": list(job["modes"]), "items": [
+                    now = time.time()
+                    payload = None if not job else {"id": job["id"], "state": job["state"], "now": now, "modes": list(job["modes"]), "items": [
                         {k: (list(v) if k == "log" else dict(v) if k == "progress" else v)
-                         for k, v in item.items() if k not in ("html", "path", "upload", "content")} for item in job["items"]]}
+                         for k, v in item.items() if k not in ("html", "path", "upload", "content", "step_times")} for item in job["items"]]}
+                    if payload:
+                        for row, item in zip(payload["items"], job["items"]):
+                            if item.get("state") == "running":
+                                row["eta"], row["eta_progress"], row["eta_high"] = safe_item_eta(item, now, store, job["modes"])
                 if payload is None:
                     self.send(404, {"error": "结果已清理，请重新转换。"})
                 else:
@@ -1070,17 +1538,31 @@ def dropped_sources(paths):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--engine-root", type=Path)
-    parser.add_argument("--no-browser", action="store_true")
-    parser.add_argument("--port", type=int, default=0)
+    exe = Path(sys.argv[0]).name
+    parser = maintenance.ConsoleArgumentParser(
+        description=f"Word-to-WeChat report workbench {APP_VERSION}. Converts Soochow-template Word reports "
+                    "into HTML for the WeChat Official Account editor. Without arguments it starts the local "
+                    "workbench and opens the browser.",
+        epilog=f"Maintenance: {exe} --export-maintenance <empty dir> writes this version's source code and "
+               "maintenance docs; start with MAINTAINING.md.")
+    parser.add_argument("-V", "--version", action="version", version=f"WordToWeChat {APP_VERSION}")
+    parser.add_argument("--export-maintenance", type=Path, metavar="DIR",
+                        help="export source code, MAINTAINING.md and the WeChat layout checklist to DIR, then exit")
+    parser.add_argument("--engine-root", type=Path, help="directory holding configs/ (default: built-in)")
+    parser.add_argument("--no-browser", action="store_true", help="start the server without opening a browser")
+    parser.add_argument("--port", type=int, default=0, help="local port (default: random)")
     parser.add_argument("--ready-file", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--no-update-check", action="store_true",
-                        help="不查 GitHub 上有没有新版本（默认启动后台查一次）")
+                        help="skip the one-time GitHub release check at startup")
     parser.add_argument("sources", nargs="*", type=Path,
-                        help="拖到程序图标上的 Word 报告，启动后按“自动”模式直接转换")
+                        help="Word reports to convert right away in auto mode (same as dropping them on the EXE)")
     args = parser.parse_args()
+    if args.export_maintenance:
+        written = maintenance.export_maintenance(args.export_maintenance)
+        print(f"Exported {len(written)} files to {args.export_maintenance.resolve()}; start with MAINTAINING.md.")
+        return
     root = args.engine_root or HERE
+    remove_legacy_eta_file()
     clean_orphans()
     app = Workbench(root.resolve())
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
@@ -1119,7 +1601,8 @@ def main():
             app.update = fetch_latest_release()
 
         threading.Thread(target=check_update, daemon=True).start()
-    # 拖入提示弹窗可能阻塞很久：maintain 空闲计时须在其后才启动，否则 90 秒宽限先关掉服务
+    # 拖入提示弹窗可能阻塞很久：maintain 须在其后启动并从此刻重新计空闲，否则 90 秒宽限先关掉服务
+    app.last_activity = time.monotonic()
     threading.Thread(target=app.maintain, daemon=True).start()
     if not args.no_browser:
         webbrowser.open_new(open_url)
@@ -1143,6 +1626,9 @@ if __name__ == "__main__":
             sys.stdout = sys.stderr = open(log_path, "w", encoding="utf-8", buffering=1)
         import convert_worker
         sys.exit(convert_worker.main())
+    if maintenance.wants_console(sys.argv):
+        maintenance.attach_console()
+        sys.argv = [("--help" if arg == "/?" else arg) for arg in sys.argv]
     try:
         main()
     except Exception:

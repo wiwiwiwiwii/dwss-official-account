@@ -31,7 +31,7 @@
     "toc_image_text_indent_css": "0",
     "toc_image_text_align": "center",
     "toc_image_line_height": 1,
-    "heading_font_family": "Microsoft YaHei, sans-serif",
+    "heading_font_family": "mp-quote, PingFang SC, system-ui, -apple-system, BlinkMacSystemFont, Helvetica Neue, Hiragino Sans GB, Microsoft YaHei UI, Microsoft YaHei, Arial, sans-serif",
     "heading_level_1_font_size_px": 17,
     "heading_level_2_font_size_px": 14,
     "heading_level_3_font_size_px": 14,
@@ -95,7 +95,8 @@
     "render_tables": true,
     "heading_as_bold_paragraph": true,
     "use_custom_heading_blocks": true,
-    "use_heading_style_names_only": true
+    "use_heading_style_names_only": true,
+    "relink_local_charts": true
   },
   "matching": {
     "main_heading_regex": "^\\s*\\d+\\.\\s*\\S+",

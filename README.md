@@ -6,7 +6,8 @@ HTML。单文件 EXE，双击即用，转换和预览都在本机完成。
 ## 下载
 
 到 [Releases](https://github.com/wiwiwiwiwii/dwss-official-account/releases/latest)
-下载 `报告转公众号.exe`，放在任意位置双击运行。页面上会列出该版本的 SHA256，可自行核对。
+下载 `dwss-official-account.exe`（GitHub 附件名只能用英文，可自行改名为「报告转公众号.exe」），放在任意位置
+双击运行。页面上会列出该版本的 SHA256，可自行核对。
 
 运行需要本机已安装并可正常打开的 Microsoft Word 桌面版（转换要用到它）。程序本身不需要
 另装 Python 或任何库。
@@ -20,6 +21,10 @@ HTML。单文件 EXE，双击即用，转换和预览都在本机完成。
 
 也可以把 Word 文件直接拖到 EXE 图标上，按记忆中的设置直接开始转换。
 
+工作台在系统默认浏览器中打开，Windows 上的 Chrome、Edge、Firefox 都可用；360、QQ 等双核浏览器会自动使用
+极速内核，浏览器过旧时页面顶部会提示换用哪种浏览器。浏览器不允许自动复制时，会改用另一种方式写入同样的
+内容，仍不行才选中正文并提示按 Ctrl+C。
+
 几条约定：
 
 - 提取框架看文档结构，标题类型看封面页眉措辞，两者分开判定。
@@ -27,6 +32,7 @@ HTML。单文件 EXE，双击即用，转换和预览都在本机完成。
   （标题段、表格图与数据来源），勾选则保留；点评报告勾选后把该区块附在摘要之后。
 - 含正文的转换会做图表与文字自检，结果显示在正文框顶端的信息条里。
 - 同批最多 30 份，单份最多 100 MB。
+- 用完可以直接关闭标签页，工作台约 90 秒后自动退出；「关闭工作台」按钮立即退出。
 
 ## 隐私与网络
 
@@ -44,8 +50,12 @@ python src/app.py
 pwsh -NoLogo -NoProfile -File src/build.ps1 -InstallDependencies
 ```
 
-构建产物是 `release/报告转公众号.exe`，脚本会同时复制到仓库根目录并打印两处哈希。
-构建依赖装在上级目录的 `.build-venv`，不改动系统 Python。
+构建产物按 `src/app.py` 的 `APP_VERSION` 命名（`v2.0.0` → `release/报告转公众号v2_0.exe`），脚本会同时复制到
+仓库根目录并打印两处哈希。构建依赖装在上级目录的 `.build-venv`，不改动系统 Python。
+EXE 内嵌一份维护包：`<exe> --help` 查看命令行用法，`<exe> --export-maintenance <空目录>` 导出本版源码与
+`MAINTAINING.md`（维护说明，从这里开始读）。仓库根目录的 `MAINTAINING.md`、`docs/wechat-mp-official/`
+（公众号排版规范清单与官方检测规则）和 `tests/wechat_compliance_check.py`（离线合规检查）就是这份维护包的内容，
+构建时会被打进 EXE。
 
 ## 已知边界
 

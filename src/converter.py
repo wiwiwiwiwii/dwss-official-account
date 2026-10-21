@@ -45,10 +45,42 @@ WD_DO_NOT_SAVE_CHANGES = 0
 WD_GO_TO_PAGE = 1
 WD_GO_TO_ABSOLUTE = 1
 WD_ALIGN_PARAGRAPH_LEFT = 0
+WD_UNDEFINED = 9999999
+# Word 汇总多字符范围的 Bold/Underline 时不计这些字符的格式（单个字符的范围照常报告）。实测（整个 BMP，
+# tests/perf-v117/fixtures/probe_ignored.py）为空格、U+00A0、U+2005、U+3000 与控制字符 U+0009、U+000B、U+000C、
+# U+000E、U+0012；其余控制字符多数无法作为文字插入实测，一并按不计处理。U+000B 渲染时去掉，其格式不影响结果，不必读取
+FORMAT_BLIND_CHARS = frozenset(" \xa0\u2005\u3000").union(
+    chr(code) for code in range(0x20) if chr(code) not in "\x0b\r\x07")
+
+# 公众号《内容排版规范》第 3 条：正文不设自定义字体族。官方检测引擎只放行以平台默认
+# 字体栈开头的 font-family；结果页复制正文时会把每个元素的计算字体写进内联样式，
+# 所以成品声明的字体必须就是这套默认字体栈（见 docs/wechat-mp-official/checklist.md）。
+# 不加引号：样式写在双引号属性里，mp-quote 是合法标识符。
+WECHAT_FONT_FAMILY = ("mp-quote, PingFang SC, system-ui, -apple-system, BlinkMacSystemFont, "
+                      "Helvetica Neue, Hiragino Sans GB, Microsoft YaHei UI, Microsoft YaHei, Arial, sans-serif")
+WECHAT_FONT_FAMILY_PREFIX = "mp-quote, PingFang SC, system-ui, -apple-system"
+FONT_FAMILY_CONFIG_KEYS = (("output", "font_family"), ("output", "heading_font_family"),
+                           ("styles", "subheading_font_family"))
+
+
+def normalize_font_family(value: str) -> str:
+    """与官方检测同口径：去引号、合并空白后比较前缀。"""
+    return re.sub(r"\s+", " ", re.sub(r"[\"']", "", value or "")).strip()
+
+
+def enforce_wechat_font_family(cfg: dict) -> dict:
+    """配置里不以平台默认字体栈开头的字体族一律换成默认字体栈。"""
+    for section, key in FONT_FAMILY_CONFIG_KEYS:
+        block = cfg.get(section)
+        if isinstance(block, dict) and key in block and not normalize_font_family(
+                str(block[key])).startswith(WECHAT_FONT_FAMILY_PREFIX):
+            block[key] = WECHAT_FONT_FAMILY
+    return cfg
+
 
 DEFAULT_CONFIG = {
     "output": {
-        "font_family": "Microsoft YaHei, sans-serif",
+        "font_family": WECHAT_FONT_FAMILY,
         "font_size_px": 14,
         "line_height": 1.75,
         "page_margin_css": "24px auto",
@@ -98,7 +130,7 @@ DEFAULT_CONFIG = {
         "toc_image_text_indent_css": "0",
         "toc_image_text_align": "center",
         "toc_image_line_height": 1,
-        "heading_font_family": "Microsoft YaHei, sans-serif",
+        "heading_font_family": WECHAT_FONT_FAMILY,
         "heading_level_1_font_size_px": 17,
         "heading_level_2_font_size_px": 14,
         "heading_level_3_font_size_px": 14,
@@ -171,6 +203,9 @@ DEFAULT_CONFIG = {
         "render_valuation_table": False,
         "valuation_table_keyword": "估值表",
         "heading_as_bold_paragraph": True,
+        # 正文导出前把本地图表改写为外链到不存在的工作簿（chart_relink.py）：Word 导出筛选 HTML 时
+        # 不再逐张等待 Excel/excelcnv。关闭即完全旧行为（tests/perf-v117/design.md 第二节）
+        "relink_local_charts": True,
     },
     "matching": {
         "main_heading_regex": r"^\s*\d+\.\s*\S+",
@@ -207,7 +242,7 @@ class ProcessingError(Exception):
 
 SUMMARY_DEFAULT_CONFIG = {
     "output": {
-        "font_family": "Microsoft YaHei, sans-serif",
+        "font_family": WECHAT_FONT_FAMILY,
         "font_size_px": 14,
         "line_height": 2.0,
         "page_margin_css": "24px auto",
@@ -240,12 +275,13 @@ SUMMARY_DEFAULT_CONFIG = {
         "require_left_align_for_heading": True,
         "fallback_to_first_page": True,
         "strip_leading_markers": True,
-        "detect_heading_by_neighbors": True
+        "detect_heading_by_neighbors": True,
+        "fast_format_runs": True
     },
     "styles": {
         "subheading_bg_color": "#76A2E9",
         "subheading_text_color": "#FFFFFF",
-        "subheading_font_family": "Microsoft YaHei, sans-serif",
+        "subheading_font_family": WECHAT_FONT_FAMILY,
         "subheading_font_size_px": 14,
         "subheading_line_height": 1.5,
         "subheading_border_radius_px": 8,
@@ -307,7 +343,7 @@ def load_config(mode: str, config_dir: Optional[Path] = None) -> dict:
     with path.open("r", encoding="utf-8") as stream:
         cfg = deep_merge(cfg, json.load(stream))
     cfg["_mode"] = mode
-    return cfg
+    return enforce_wechat_font_family(cfg)
 
 
 def resolve_image_ppi(cfg: dict) -> int:
@@ -355,6 +391,63 @@ def ensure_dependencies() -> None:
         )
 
 
+def _end_marked_word(caption: str, wait_seconds: float = 10.0) -> bool:
+    """结束标题含 caption 的那个 WINWORD（本程序实例的唯一窗口标记）：按 OpusApp 窗口标题定位，
+    确认进程映像是 WINWORD.EXE 才结束。Word 打开文档后标题是「文档名 - 标记」，所以做包含匹配。
+    返回是否结束了进程。"""
+    import ctypes
+    import time
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.QueryFullProcessImageNameW.argtypes = [ctypes.c_void_p, wintypes.DWORD, ctypes.c_wchar_p,
+                                                    ctypes.POINTER(wintypes.DWORD)]
+    kernel32.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+
+    def find_pids():
+        found = []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        def visit(hwnd, _):
+            name = ctypes.create_unicode_buffer(64)
+            user32.GetClassNameW(hwnd, name, 64)
+            if name.value == "OpusApp":
+                title = ctypes.create_unicode_buffer(512)
+                user32.GetWindowTextW(hwnd, title, 512)
+                if caption in title.value:
+                    pid = wintypes.DWORD()
+                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                    if pid.value:
+                        found.append(pid.value)
+            return True
+
+        user32.EnumWindows(visit, 0)
+        return sorted(set(found))
+
+    ended = False
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        for pid in find_pids():
+            handle = kernel32.OpenProcess(0x0001 | 0x1000, False, pid)  # TERMINATE | QUERY_LIMITED_INFORMATION
+            if not handle:
+                continue
+            try:
+                size = wintypes.DWORD(1024)
+                image = ctypes.create_unicode_buffer(1024)
+                if kernel32.QueryFullProcessImageNameW(handle, 0, image, ctypes.byref(size)) and \
+                        image.value.lower().endswith("\\winword.exe"):
+                    ended = bool(kernel32.TerminateProcess(handle, 1)) or ended
+            finally:
+                kernel32.CloseHandle(handle)
+        if not find_pids() or time.monotonic() >= deadline:
+            return ended
+        time.sleep(0.5)
+
+
 class WordApp:
     def __init__(self, image_ppi: int = 220) -> None:
         self.word = None
@@ -365,24 +458,47 @@ class WordApp:
         self.main_title = ""
         self.subtitle = ""
         self._title_checked = False
+        self._caption = ""
 
     def __enter__(self):
         ensure_dependencies()
         import pythoncom
-        import win32com.client
 
         self.pythoncom = pythoncom
         pythoncom.CoInitialize()
         try:
-            self.word = win32com.client.DispatchEx("Word.Application")
-            self.word.AutomationSecurity = 3
-            self.word.Visible = False
-            self.word.DisplayAlerts = 0
-            self._mark_word_window()
+            self._start()
             return self
         except Exception:
             self.__exit__(None, None, None)
             raise
+
+    def _start(self) -> None:
+        import win32com.client
+
+        self.word = win32com.client.DispatchEx("Word.Application")
+        self.word.AutomationSecurity = 3
+        self.word.Visible = False
+        self.word.DisplayAlerts = 0
+        self._mark_word_window()
+
+    def restart(self) -> None:
+        """重建 Word 实例（正文导出失败后 Word 已退出、COM 连接失效或文档关不掉时用）。
+
+        先 Quit；Quit 失败则按本实例的窗口标记标题定位并结束这一个 WINWORD（与工作台
+        reap_word_instance 的识别方式相同，绝不按进程名）。再 DispatchEx 并重设安全级别、
+        隐藏、不弹框与窗口标记。已读的标题等状态保留，调用方持有的本对象引用不变。"""
+        old, self.word = self.word, None
+        quit_failed = old is None
+        if old is not None:
+            try:
+                old.Quit()
+            except Exception:
+                quit_failed = True
+        del old
+        if quit_failed and self._caption:
+            _end_marked_word(self._caption)
+        self._start()
 
     def _mark_word_window(self):
         """给本实例 Word 主窗口打上唯一标记标题：调用方取消或超时后按标题实时定位
@@ -392,7 +508,8 @@ class WordApp:
             import os
 
             marker = os.environ.get("WECHAT_WORKBENCH_MARKER") or str(os.getpid())
-            self.word.Caption = f"wechat-workbench-{marker}"
+            self._caption = f"wechat-workbench-{marker}"
+            self.word.Caption = self._caption
         except Exception:
             pass
 
@@ -402,6 +519,13 @@ class WordApp:
             ConfirmConversions=False, Visible=False,
             PasswordDocument="", WritePasswordDocument="",
         )
+        # 批注不属于正文：导出的 HTML 会把批注引用写成「[李1]」这类锚点混进句子。
+        # 只删只读打开的内存副本里的批注，关闭时不保存，源文件不变
+        try:
+            if int(document.Comments.Count):
+                document.DeleteAllComments()
+        except Exception as comment_error:
+            print(f"  [warn] 批注未能移除，成品中可能残留批注引用标记：{comment_error}")
         if not self._title_checked:
             self._title_checked = True
             try:
@@ -742,6 +866,7 @@ class SummaryExtractor:
         self.re_leading_marker = re.compile(self.match_cfg["leading_marker_regex"])
         self.re_bullet_chars = re.compile(self.match_cfg["bullet_chars_regex"])
         self.re_space = re.compile(self.match_cfg["space_regex"])
+        self.last_inline_route: Tuple[str, str, int] = ("per_char", "", 0)
 
     def extract_html(self, doc) -> str:
         rng = self._find_summary_range(doc)
@@ -860,15 +985,31 @@ class SummaryExtractor:
     def _extract_paragraph_items(self, rng) -> List[str]:
         items: List[str] = []
         paras = self._range_paragraphs(rng)
+        # 每段的文字与是否列表项只向 Word 取一次（原函数、原调用），前后有效邻居用缓存值判断；提取期间文档不修改，结果不变
+        texts = [self._paragraph_plain_text(para) for para in paras]
+        bullets = [bool(text) and self._paragraph_is_bullet(para) for para, text in zip(paras, texts)]
+        prev_bullets: List[bool] = []
+        last = False
+        for text, bullet in zip(texts, bullets):
+            prev_bullets.append(last)
+            if text:
+                last = bullet
+        next_bullets: List[bool] = []
+        last = False
+        for text, bullet in zip(reversed(texts), reversed(bullets)):
+            next_bullets.append(last)
+            if text:
+                last = bullet
+        next_bullets.reverse()
         meta = []
         for idx, para in enumerate(paras):
-            raw_text = self._paragraph_plain_text(para)
+            raw_text = texts[idx]
             if not raw_text:
                 meta.append({"para": para, "text": "", "is_bullet": False, "is_heading": False})
                 continue
-            is_bullet = self._paragraph_is_bullet(para)
-            prev_bullet = self._previous_meaningful_is_bullet(paras, idx)
-            next_bullet = self._next_meaningful_is_bullet(paras, idx)
+            is_bullet = bullets[idx]
+            prev_bullet = prev_bullets[idx]
+            next_bullet = next_bullets[idx]
             is_heading = self._paragraph_is_summary_heading(para, raw_text, is_bullet, prev_bullet, next_bullet)
             meta.append({
                 "para": para,
@@ -876,6 +1017,21 @@ class SummaryExtractor:
                 "is_bullet": is_bullet,
                 "is_heading": is_heading,
             })
+
+        # 步内进度（只供工作台 ETA，工作台不把它放进日志）：第二遍逐段取格式，快速路径与逐字回退共用一个计数。
+        # 字数取第一遍已读到的各段文字，不增加 Word 调用；约每 5% 字数、至少隔 0.5 秒打印一次，最后一段必打。
+        import time
+        sub_total = sum(len(m["text"]) for m in meta)
+        sub_state = {"done": 0, "shown": 0, "at": time.monotonic()}
+        print(f"[SUB] summary 0/{sub_total}", flush=True)
+
+        def sub_progress(entry):
+            sub_state["done"] += len(entry["text"])
+            now = time.monotonic()
+            last = sub_state["done"] >= sub_total
+            if last or (sub_state["done"] - sub_state["shown"] >= 0.05 * sub_total and now - sub_state["at"] >= 0.5):
+                sub_state["shown"], sub_state["at"] = sub_state["done"], now
+                print(f"[SUB] summary {sub_state['done']}/{sub_total}", flush=True)
 
         i = 0
         while i < len(meta):
@@ -899,6 +1055,7 @@ class SummaryExtractor:
                             f'text-align:{spacer_align};"><br/></p>'
                         )
                     items.append(self._render_subheading(html_inner))
+                sub_progress(entry)
                 i += 1
                 continue
 
@@ -909,6 +1066,7 @@ class SummaryExtractor:
                     li_inner = self._cleanup_inline_html(li_inner)
                     if li_inner:
                         li_blocks.append(self._render_bullet_list_item(li_inner))
+                    sub_progress(meta[i])
                     i += 1
                 if li_blocks:
                     items.append(self._render_bullet_list(li_blocks))
@@ -918,6 +1076,7 @@ class SummaryExtractor:
             html_inner = self._cleanup_inline_html(html_inner)
             if html_inner:
                 items.append(f"<p>{html_inner}</p>")
+            sub_progress(entry)
             i += 1
         return items
 
@@ -961,15 +1120,6 @@ class SummaryExtractor:
             return False
         return bool(self.re_bullet_chars.search(raw))
 
-    def _previous_meaningful_is_bullet(self, paras: List, idx: int) -> bool:
-        j = idx - 1
-        while j >= 0:
-            txt = self._paragraph_plain_text(paras[j])
-            if txt:
-                return self._paragraph_is_bullet(paras[j])
-            j -= 1
-        return False
-
     def _next_meaningful_is_bullet(self, paras: List, idx: int) -> bool:
         j = idx + 1
         while j < len(paras):
@@ -1012,6 +1162,146 @@ class SummaryExtractor:
         return False
 
     def _render_paragraph_inline(self, rng, is_bullet: bool = False) -> str:
+        # 先按格式二分成段读取（tests/perf-v117/design.md 第一节）；任一前提不成立或出错即丢弃中间结果，整段走逐字路径
+        if self.sum_cfg.get("fast_format_runs", True):
+            try:
+                rendered = self._render_paragraph_inline_fast(rng, is_bullet)
+            except Exception as exc:
+                self.last_inline_route = ("per_char", f"error:{type(exc).__name__}", self.last_inline_route[2])
+                rendered = None
+            if rendered is not None:
+                return rendered
+        else:
+            self.last_inline_route = ("per_char", "disabled", 0)
+        return self._render_paragraph_inline_per_char(rng, is_bullet)
+
+    def _inline_skip_count(self, raw_text: str, is_bullet: bool) -> int:
+        # 与 _render_paragraph_inline_per_char 开头的跳过字数算法相同
+        stripped_raw = raw_text.replace("\r", "").replace("\x07", "").replace("\x0b", "")
+        skip_count = 0
+        if self.sum_cfg.get("strip_leading_markers", True):
+            marker_match = self.re_leading_marker.match(stripped_raw)
+            if marker_match:
+                skip_count = len(marker_match.group(0))
+        if is_bullet:
+            tmp = stripped_raw[skip_count:]
+            if not self._ascii_minus_is_content_prefix(tmp):
+                bullet_match = re.match(r"^[\s\u25A0\u25AA\u25CF\u2022\u2027\u00B7\-\*]+", tmp)
+                if bullet_match:
+                    skip_count += len(bullet_match.group(0))
+        return skip_count
+
+    def _render_paragraph_inline_fast(self, rng, is_bullet: bool) -> Optional[str]:
+        """格式相同的连续文字一次读取：按 Bold/Underline 是否为 wdUndefined 二分段落范围，叶子内每个字共享叶子的键。
+
+        返回 None 表示前提不成立，由调用方整段走逐字路径；last_inline_route 记录（路径, 前提或原因, 节点数）。
+        """
+        self.last_inline_route = ("per_char", "error", 0)
+        raw_text = str(rng.Text)
+        start = int(rng.Start)
+        end = int(rng.End)
+        # 段落标记 \r 与单元格结束标记 \r\x07 在位置上都只占 1 个位置
+        if raw_text.endswith("\r\x07"):
+            body, end = raw_text[:-2], end - 1
+        elif raw_text.endswith("\r"):
+            body, end = raw_text[:-1], end - 1
+        else:
+            body = raw_text
+        # 位置与字符一一对应才能按位置二分；代理对、隐藏文字、域代码会让两者不等
+        if len(body) != end - start:
+            self.last_inline_route = ("per_char", "length", 0)
+            return None
+        # 文字读取含域代码时，逐字路径读到的与按位置分段读到的不同（合成夹具实测）
+        if rng.TextRetrievalMode.IncludeFieldCodes:
+            self.last_inline_route = ("per_char", "field_codes", 0)
+            return None
+        if int(rng.Fields.Count) != 0:
+            self.last_inline_route = ("per_char", "fields", 0)
+            return None
+        if int(rng.InlineShapes.Count) != 0:
+            self.last_inline_route = ("per_char", "inline_shapes", 0)
+            return None
+
+        # Duplicate 保持原范围所在的 story 与文字读取设置；位置由 Python 整数传递，不再读 Start/End
+        probe = rng.Duplicate
+        leaves: List[Tuple[str, Tuple[bool, bool]]] = []
+        nodes = 0
+        stack = [(start, end)] if end > start else []
+        while stack:
+            a, b = stack.pop()
+            nodes += 1
+            self.last_inline_route = ("per_char", "error", nodes)
+            probe.SetRange(a, b)
+            bold = int(probe.Bold)
+            underline = int(probe.Underline) if bold != WD_UNDEFINED else WD_UNDEFINED
+            if bold != WD_UNDEFINED and underline != WD_UNDEFINED:
+                text = str(probe.Text)
+                if len(text) != b - a:
+                    self.last_inline_route = ("per_char", "text_mismatch", nodes)
+                    return None
+                key = (bold != 0, underline != 0)
+                # 汇总值不反映叶子里空白字符自己的格式：这些字符逐个读取，按各自的键拆开叶子
+                cut = 0
+                for k, ch in enumerate(text if b - a > 1 else ""):
+                    if ch not in FORMAT_BLIND_CHARS:
+                        continue
+                    nodes += 1
+                    probe.SetRange(a + k, a + k + 1)
+                    blind_bold = int(probe.Bold)
+                    blind_underline = int(probe.Underline)
+                    if WD_UNDEFINED in (blind_bold, blind_underline):
+                        self.last_inline_route = ("per_char", "mixed_single", nodes)
+                        return None
+                    if k > cut:
+                        leaves.append((text[cut:k], key))
+                    leaves.append((ch, (blind_bold != 0, blind_underline != 0)))
+                    cut = k + 1
+                if cut < len(text):
+                    leaves.append((text[cut:], key))
+                continue
+            if b - a <= 1:
+                self.last_inline_route = ("per_char", "mixed_single", nodes)
+                return None
+            mid = (a + b) // 2
+            stack.append((mid, b))
+            stack.append((a, mid))
+        if "".join(text for text, _ in leaves) != body:
+            self.last_inline_route = ("per_char", "text_mismatch", nodes)
+            return None
+
+        # 与逐字路径逐字的处理顺序相同：去标记 → 为空跳过（不读键、不打断合并段）→ 换空白 → 消耗跳过字数 → 按键合并
+        parts: List[str] = []
+        current_key: Optional[Tuple[bool, bool]] = None
+        current_buf: List[str] = []
+        remaining_skip = self._inline_skip_count(raw_text, is_bullet)
+        for txt, key in leaves:
+            txt = txt.replace("\r", "").replace("\x07", "").replace("\x0b", "")
+            txt = txt.replace("\t", " ").replace("\xa0", " ")
+            if not txt:
+                continue
+
+            if remaining_skip > 0:
+                if len(txt) <= remaining_skip:
+                    remaining_skip -= len(txt)
+                    continue
+                txt = txt[remaining_skip:]
+                remaining_skip = 0
+
+            if current_key is None:
+                current_key = key
+            if key != current_key:
+                parts.append(self._wrap_run("".join(current_buf), current_key[0], current_key[1]))
+                current_buf = []
+                current_key = key
+            current_buf.append(html.escape(txt))
+
+        if current_buf and current_key is not None:
+            parts.append(self._wrap_run("".join(current_buf), current_key[0], current_key[1]))
+
+        self.last_inline_route = ("fast", "", nodes)
+        return self._cleanup_inline_html("".join(parts))
+
+    def _render_paragraph_inline_per_char(self, rng, is_bullet: bool = False) -> str:
         raw_text = str(rng.Text)
         stripped_raw = raw_text.replace("\r", "").replace("\x07", "").replace("\x0b", "")
         skip_count = 0
@@ -1179,6 +1469,8 @@ class SummaryExtractor:
         bold_weight = self.out_cfg.get("inline_bold_font_weight", 700)
         underline_decoration = self.out_cfg.get("inline_underline_text_decoration", "underline")
         underline_offset = self.out_cfg.get("inline_underline_offset_em", 0.08)
+        # body 显式 text-align:left：复制正文时结果页把计算对齐写进每个元素，未声明对齐的
+        # 节点会写成 start，公众号《内容排版规范》1.6 判为非标准值。
         return f"""<!DOCTYPE html>
 <html lang=\"zh-CN\">
 <head>
@@ -1195,6 +1487,7 @@ body {{
     font-family: {font_family};
     font-size: {font_size}px;
     line-height: {line_height};
+    text-align: left;
     word-break: break-word;
 }}
 p {{
@@ -1644,6 +1937,12 @@ class HtmlCleaner:
             if compact_text in {"\u76ee\u5f55", "\u5185\u5bb9\u76ee\u5f55", "\u56fe\u8868\u76ee\u5f55"}:
                 block.is_toc = True
 
+    @staticmethod
+    def _looks_like_toc_entry(block: Block) -> bool:
+        """图表目录条目不一定被识别成 is_toc：指向 `_Toc` 书签的链接、图表目录样式也算目录块。"""
+        return ("tableoffigures" in (block.class_text or "").lower()
+                or block.tag.find("a", href=re.compile(r"^#_Toc")) is not None)
+
     def _find_start_index(self, blocks: List[Block]) -> int:
         mode = self.doc_cfg.get("start_mode", "first_main_heading")
         if mode == "first_main_heading":
@@ -1654,11 +1953,23 @@ class HtmlCleaner:
                 if not text:
                     continue
                 if self.re_main_heading.search(text):
-                    return i
+                    return self._start_after_toc(blocks, i)
         for i, block in enumerate(blocks):
             if not block.is_toc and block.text:
                 return i
         return 0
+
+    def _start_after_toc(self, blocks: List[Block], heading_idx: int) -> int:
+        """第一个主标题之前有目录时，正文从最后一个目录块之后的第一个有内容的块起算：
+        目录与第一章之间的导语和图表属于正文。首页摘要在目录之前，不受影响；没有目录时仍从主标题起。"""
+        toc_like = [j for j in range(heading_idx)
+                    if blocks[j].is_toc or self._looks_like_toc_entry(blocks[j])]
+        if not toc_like:
+            return heading_idx
+        for j in range(toc_like[-1] + 1, heading_idx):
+            if blocks[j].text or self._block_has_image(blocks[j].tag):
+                return j
+        return heading_idx
 
     def _find_stop_index(self, blocks: List[Block], start_idx: int) -> int:
         stop_patterns = [p.strip() for p in self.doc_cfg.get("stop_at_patterns", []) if p.strip()]
@@ -2796,7 +3107,7 @@ class HtmlCleaner:
         font_size = self.out_cfg.get("figure_caption_font_size_px", max(12, self.out_cfg["font_size_px"] - 1))
         margin_top = self.out_cfg.get("figure_caption_margin_top_em", 0.55)
         margin_bottom = self.out_cfg.get("figure_caption_margin_bottom_em", 0.22)
-        font_family = self.out_cfg.get("font_family", "Microsoft YaHei, sans-serif")
+        font_family = self.out_cfg.get("font_family", WECHAT_FONT_FAMILY)
         default_color = self.out_cfg.get("figure_caption_text_color", "#17365d")
         margin_right = self.out_cfg.get("figure_caption_margin_right_css", "0")
         margin_left = self.out_cfg.get("figure_caption_margin_left_css", "0")
@@ -2817,7 +3128,7 @@ class HtmlCleaner:
         font_size = self.out_cfg.get("figure_source_font_size_px", max(12, self.out_cfg["font_size_px"] - 1))
         margin_top = self.out_cfg.get("figure_source_margin_top_em", 0.18)
         margin_bottom = self.out_cfg.get("figure_source_margin_bottom_em", 1.2)
-        font_family = self.out_cfg.get("font_family", "Microsoft YaHei, sans-serif")
+        font_family = self.out_cfg.get("font_family", WECHAT_FONT_FAMILY)
         color = self.out_cfg.get("figure_source_text_color", "#888888")
         margin_right = self.out_cfg.get("figure_source_margin_right_css", "0")
         margin_left = self.out_cfg.get("figure_source_margin_left_css", "0")
@@ -3164,6 +3475,8 @@ class HtmlCleaner:
             background_position = self.out_cfg.get("weekly_heading_level_1_background_position", "center")
             text_margin_right = self.out_cfg.get("weekly_heading_level_1_text_margin_right_css", "0")
             text_margin_bottom = self.out_cfg.get("weekly_heading_level_1_text_margin_bottom_css", "0")
+            # 背景框用 min-height 而非固定 height：标题折成两行时框随内容撑高，不按
+            # overflow:hidden 裁掉第二行（《内容排版规范》1.5.2 内容溢出容器）。
             return (
                 spacer +
                 f'<section style="margin:{margin_top}em {outer_margin_horizontal} '
@@ -3171,7 +3484,7 @@ class HtmlCleaner:
                 f'text-indent:{text_indent}; text-align:{text_align}; '
                 f'max-width:100%; box-sizing:border-box;">'
                 f'<section style="display:inline-block; width:{width_px}px; max-width:100%; '
-                f'height:{height_px}px; margin:{background_margin}; padding:{padding}; '
+                f'min-height:{height_px}px; margin:{background_margin}; padding:{padding}; '
                 f'overflow:hidden; background-image:url({bg_url}); background-size:{background_size}; '
                 f'background-repeat:{background_repeat}; background-position:{background_position}; box-sizing:border-box;">'
                 f'<section style="margin:{offset_top_px}px {text_margin_right} {text_margin_bottom} '
@@ -3464,7 +3777,10 @@ class HtmlCleaner:
 
         if inline:
             mime_type = mimetypes.guess_type(str(abs_path))[0] or "application/octet-stream"
-            data_b64 = base64.b64encode(abs_path.read_bytes()).decode("ascii")
+            data = abs_path.read_bytes()
+            if mime_type == "image/png":
+                data = flatten_transparent_png(data)
+            data_b64 = base64.b64encode(data).decode("ascii")
             return f"data:{mime_type};base64,{data_b64}"
 
         if abs_path in self.asset_map:
@@ -3492,6 +3808,8 @@ class HtmlCleaner:
         page_max_width = self.out_cfg.get("page_max_width_px", 860)
         page_background = self.out_cfg.get("page_background_color", "#ffffff")
         page_text_color = self.out_cfg.get("page_text_color", "#000000")
+        # body 显式 text-align:left：复制正文时结果页把计算对齐写进每个元素，未声明对齐的
+        # 节点会写成 start，公众号《内容排版规范》1.6 判为非标准值。
         return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -3499,11 +3817,37 @@ class HtmlCleaner:
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>cleaned_wechat_output</title>
 </head>
-<body style="margin:{page_margin}; padding:{page_padding}; max-width:{page_max_width}px; background:{page_background}; color:{page_text_color}; font-family:{font_family}; font-size:{font_size}px; line-height:{line_height}; word-break:break-word;">
+<body style="margin:{page_margin}; padding:{page_padding}; max-width:{page_max_width}px; background:{page_background}; color:{page_text_color}; font-family:{font_family}; font-size:{font_size}px; line-height:{line_height}; text-align:left; word-break:break-word;">
 {body_html}
 </body>
 </html>
 """
+
+
+def flatten_transparent_png(data: bytes, background=(255, 255, 255)) -> bytes:
+    """有透明像素的 PNG 铺到白底上重新编码；不透明或无法解码的原样返回。
+
+    公众号深色模式把正文底色换成 #191919，透明底图表里的黑灰文字会看不见
+    （《内容排版规范》4.3.2）。页面本身是白底，铺白后浅色模式下外观不变。"""
+    try:
+        from io import BytesIO
+        from PIL import Image
+        with Image.open(BytesIO(data)) as image:
+            if not (image.mode in ("RGBA", "LA", "PA")
+                    or (image.mode == "P" and "transparency" in image.info)
+                    or (image.mode in ("RGB", "L") and "transparency" in image.info)):
+                return data
+            rgba = image.convert("RGBA")
+            icc_profile = image.info.get("icc_profile")
+        if rgba.getchannel("A").getextrema()[0] == 255:
+            return data
+        flat = Image.new("RGB", rgba.size, background)
+        flat.paste(rgba, mask=rgba.getchannel("A"))
+        out = BytesIO()
+        flat.save(out, "PNG", **({"icc_profile": icc_profile} if icc_profile else {}))
+        return out.getvalue()
+    except Exception:
+        return data
 
 
 def safe_stem_ascii(path: Path) -> str:
@@ -3588,6 +3932,87 @@ def build_content_toc_fragment(src: Path, temp_dir: Path, word: WordApp, cfg: di
         return ""
 
 
+def relinked_export_source(src: Path, temp_dir: Path, cfg: dict) -> Optional[Path]:
+    """正文导出用的改写副本：本地图表改为外链到本次 temp_dir 下一个从不创建的工作簿（chart_relink.py）。
+
+    只用于 export_filtered_html；摘要、目录与样式探测仍用原副本。仅 .docx；开关
+    document.relink_local_charts 关闭、整份命中守卫、没有可改写的图表或改写出错时返回 None（用原副本）。
+    在 stdout 记一行「[relink] …」，不进成品。"""
+    if src.suffix.lower() != ".docx" or not cfg.get("document", {}).get("relink_local_charts", False):
+        return None
+    target = temp_dir / "relink" / src.name
+    try:
+        import chart_relink
+
+        result = chart_relink.relink_local_charts(src, target, temp_dir / "relink-missing" / "chart-data.xlsx")
+    except Exception as exc:
+        print(f"  [relink] failed: {type(exc).__name__}: {exc}")
+        return None
+    if result["document_skip"]:
+        print(f"  [relink] skipped document: {result['document_skip']}")
+        return None
+    print("  [relink] " + " ".join(f"{key}={value}" for key, value in sorted(result["counts"].items())))
+    return target if result["changed"] else None
+
+
+def _remove_export_leftovers(folder: Path, before: set) -> bool:
+    """删掉 folder 里导出前不存在的条目；有删不掉的返回 False。"""
+    clean = True
+    for path in folder.iterdir():
+        if path.name in before:
+            continue
+        try:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        except OSError:
+            clean = False
+    return clean
+
+
+def _close_documents(word: WordApp, paths: Iterable[Path]) -> bool:
+    """关掉仍开着的、全名是 paths 之一的文档（SaveAs 成功后文档全名已变成导出的 HTML 路径，
+    所以调用方要同时传改写副本与导出路径），关完再核对一遍确实没有了。
+    Word 不可用（COM 失效、已退出、文档关不掉）时返回 False。"""
+    targets = {Path(path).resolve() for path in paths}
+
+    def still_open():
+        documents = word.word.Documents
+        return [documents(index) for index in range(int(documents.Count), 0, -1)
+                if Path(str(documents(index).FullName)).resolve() in targets]
+
+    try:
+        for document in still_open():
+            document.Close(SaveChanges=WD_DO_NOT_SAVE_CHANGES)
+        return not still_open()
+    except Exception:
+        return False
+
+
+def export_body_html(word: WordApp, src: Path, relinked: Optional[Path], filtered_html: Path) -> None:
+    """正文导出筛选 HTML。有改写副本先导出它；Word 在这一步抛错时丢弃这次导出写出的全部文件、
+    用原副本在同一路径重导（Word 不可用或残留文件删不掉时先 restart 重建实例）。
+    只接 Exception：用户取消（KeyboardInterrupt、进程被结束）不重试。"""
+    if relinked is None:
+        word.export_filtered_html(src, filtered_html)
+        return
+    folder = filtered_html.parent
+    before = {path.name for path in folder.iterdir()}
+    try:
+        word.export_filtered_html(relinked, filtered_html)
+        return
+    except Exception as exc:
+        print(f"  [relink] export failed, re-exporting original: {type(exc).__name__}: {exc}")
+    healthy = _close_documents(word, (relinked, filtered_html))
+    clean = _remove_export_leftovers(folder, before)
+    if not (healthy and clean):
+        word.restart()
+        if not _remove_export_leftovers(folder, before):
+            raise ProcessingError("改写副本导出失败后，残留的导出文件无法删除")
+    word.export_filtered_html(src, filtered_html)
+
+
 def process_one_file(src: Path, out_dir: Path, cleaner: HtmlCleaner, word: WordApp, cfg: dict,
                     summary_extractor=None) -> dict:
     stem = safe_stem_ascii(src)
@@ -3611,7 +4036,7 @@ def process_one_file(src: Path, out_dir: Path, cleaner: HtmlCleaner, word: WordA
             src, temp_dir, stem, cleaner, word, cfg, summary_extractor
         )
 
-        word.export_filtered_html(src, filtered_html)
+        export_body_html(word, src, relinked_export_source(src, temp_dir, cfg), filtered_html)
         clean_result = cleaner.clean_html_file(
             filtered_html, f"{stem}_wechat_clean_files",
             summary_html=summary_html, toc_png_path=toc_png_path,

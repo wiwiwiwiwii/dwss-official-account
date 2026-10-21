@@ -207,20 +207,149 @@ def apply_detection(detected, toc: bool, progress):
     return modes, toc, title_kind
 
 
+LEVEL_CAPTION_RE = re.compile(r"^\s*(图|表)\s*%\d\s*[：:]")
+
+
+def _w(name: str) -> str:
+    return "{%s}%s" % (WORD_NS, name)
+
+
+def _w_val(element, path: str):
+    found = element.find(path) if element is not None else None
+    return found.get(_w("val")) if found is not None else None
+
+
+def _is_toc_link_paragraph(paragraph) -> bool:
+    """目录条目：带指向 `_Toc` 书签的超链接（内容目录、图表目录都是）。"""
+    return any((link.get(_w("anchor")) or "").startswith("_Toc") for link in paragraph.iter(_w("hyperlink")))
+
+
+def _is_toc_control(element) -> bool:
+    """顶层目录内容控件：文档部件库标为目录，或里面是 TOC 域 / `_Toc` 超链接。"""
+    if element.tag != _w("sdt"):
+        return False
+    gallery = _w_val(element, f"{_w('sdtPr')}/{_w('docPartObj')}/{_w('docPartGallery')}")
+    if gallery and "Contents" in gallery:
+        return True
+    return (_is_toc_link_paragraph(element)
+            or any((code.text or "").strip().upper().startswith("TOC") for code in element.iter(_w("instrText"))))
+
+
+def _cover_paragraph_ids(body) -> set:
+    """东吴模板首页单独成节：首个段落级分节符早于第一个顶层目录控件时，它所在的顶层元素及之前的
+    段落属于首页。正文管线不输出首页，首页的题注不算进期望。没有目录控件时不认首页节，
+    以免正文中途的分节符把前面整段正文藏出自检范围。"""
+    top = list(body)
+    first_break = next((i for i, element in enumerate(top) if element.tag == _w("p")
+                        and element.find(f"{_w('pPr')}/{_w('sectPr')}") is not None), None)
+    first_toc = next((i for i, element in enumerate(top) if _is_toc_control(element)), None)
+    if first_break is None or first_toc is None or first_toc < first_break:
+        return set()
+    return {id(p) for element in top[:first_break + 1] for p in element.iter(_w("p"))}
+
+
+class CaptionNumbering:
+    """自动编号题注的编号推算：段落的 numPr（直接设置，或沿样式 basedOn 链继承）指向的编号级别，
+    lvlText 形如「图%1：」时按 (abstractNumId, ilvl) 顺序计数，起始值取 start；共用同一 abstractNum 的
+    不同 numId 接续同一序列，带 startOverride 的 numId 第一次出现时从该值重新起算。不处理 lvlRestart。"""
+
+    def __init__(self, styles, numbering):
+        self.style_num, self.style_based = {}, {}
+        for style in (styles.iter(_w("style")) if styles is not None else ()):
+            style_id = style.get(_w("styleId"))
+            num_pr = style.find(f"{_w('pPr')}/{_w('numPr')}")
+            if num_pr is not None:
+                self.style_num[style_id] = (_w_val(num_pr, _w("numId")), _w_val(num_pr, _w("ilvl")))
+            based = _w_val(style, _w("basedOn"))
+            if based:
+                self.style_based[style_id] = based
+        self.levels, self.abstract_of, self.start_override, self.counters = {}, {}, {}, {}
+        self.restarted = set()
+        if numbering is None:
+            return
+        for abstract in numbering.iter(_w("abstractNum")):
+            for level in abstract.findall(_w("lvl")):
+                match = LEVEL_CAPTION_RE.match(_w_val(level, _w("lvlText")) or "")
+                if match:
+                    key = (abstract.get(_w("abstractNumId")), level.get(_w("ilvl")))
+                    self.levels[key] = (match.group(1), int(_w_val(level, _w("start")) or 1))
+        for num in numbering.iter(_w("num")):
+            num_id = num.get(_w("numId"))
+            self.abstract_of[num_id] = _w_val(num, _w("abstractNumId"))
+            for override in num.findall(_w("lvlOverride")):
+                start = _w_val(override, _w("startOverride"))
+                if start is not None:
+                    self.start_override[(num_id, override.get(_w("ilvl")))] = int(start)
+
+    def _num_pr(self, paragraph):
+        """(numId, ilvl)：两项各自取段落直接设置的值，缺的沿样式 basedOn 链往上找。"""
+        props = paragraph.find(_w("pPr"))
+        num_pr = props.find(_w("numPr")) if props is not None else None
+        num_id, level = (_w_val(num_pr, _w("numId")), _w_val(num_pr, _w("ilvl"))) if num_pr is not None else (None, None)
+        style = _w_val(props, _w("pStyle"))
+        for _ in range(20):
+            if (num_id is not None and level is not None) or not style:
+                break
+            style_id, style_level = self.style_num.get(style, (None, None))
+            num_id = num_id if num_id is not None else style_id
+            level = level if level is not None else style_level
+            style = self.style_based.get(style)
+        return (num_id, level or "0") if num_id is not None else None
+
+    def take(self, paragraph):
+        """该段是自动编号题注时计数并返回 (图/表, 编号)，否则返回 None。"""
+        num = self._num_pr(paragraph)
+        if not num or num[0] in (None, "0") or num[0] not in self.abstract_of:
+            return None
+        key = (self.abstract_of[num[0]], num[1])
+        if key not in self.levels:
+            return None
+        kind, start = self.levels[key]
+        if num in self.start_override and num not in self.restarted:
+            self.restarted.add(num)
+            self.counters[key] = self.start_override[num] - 1
+        self.counters[key] = self.counters.get(key, start - 1) + 1
+        return kind, self.counters[key]
+
+
+def _walk_paragraphs(node, in_control: bool = False):
+    """按文档顺序给出 (段落, 是否在内容控件里)；跳过 `mc:Fallback`（与 Choice 重复的一份）。"""
+    for child in node:
+        if child.tag == MC_FALLBACK:
+            continue
+        if child.tag == _w("p"):
+            yield child, in_control
+        yield from _walk_paragraphs(child, in_control or child.tag == _w("sdtContent"))
+
+
 def docx_caption_numbers(source: Path):
-    """按段落扫源 .docx 正文里的「图N：/表N：」题注编号；读不了时返回 None。"""
+    """源 .docx 正文题注的「图N/表N」编号；读不了时返回 None。
+
+    跳过目录条目（内容控件里的段落、`_Toc` 超链接）与首页节；自动编号题注的文字里没有编号，
+    按 numbering.xml 推算（首页的自动编号题注照样计数，只是不算进期望）。"""
     if source.suffix.lower() != ".docx":
         return None
     try:
         with zipfile.ZipFile(str(source)) as archive:
+            names = set(archive.namelist())
             document = ElementTree.fromstring(archive.read("word/document.xml"))
+            styles, numbering = (ElementTree.fromstring(archive.read(name)) if name in names else None
+                                 for name in ("word/styles.xml", "word/numbering.xml"))
     except Exception:
         return None
+    body = document.find(_w("body"))
+    cover = _cover_paragraph_ids(body) if body is not None else set()
+    numbers = CaptionNumbering(styles, numbering)
     found = {"图": set(), "表": set()}
-    for paragraph in document.iter("{%s}p" % WORD_NS):
-        match = CAPTION_RE.match(_xml_texts(paragraph))
-        if match:
-            found[match.group(1)].add(int(match.group(2)))
+    for paragraph, in_control in _walk_paragraphs(document):
+        if in_control or _is_toc_link_paragraph(paragraph):
+            continue
+        caption = numbers.take(paragraph)
+        if caption is None:
+            match = CAPTION_RE.match(_xml_texts(paragraph))
+            caption = (match.group(1), int(match.group(2))) if match else None
+        if caption and id(paragraph) not in cover:
+            found[caption[0]].add(caption[1])
     return found
 
 
@@ -263,7 +392,9 @@ def loose_key(text: str) -> str:
 
 
 def docx_body_paragraphs(source: Path):
-    """源 .docx 顶层正文段落 [(文本, 是否标题样式)]；表格/文本框里的段落不算。读不了返回 None。"""
+    """源 .docx 顶层正文段落的文本列表，以及每个顶层目录控件之后第一段在列表里的下标。
+
+    表格/文本框里的段落和目录条目（`_Toc` 超链接）不算。读不了返回 None。"""
     if source.suffix.lower() != ".docx":
         return None
     try:
@@ -274,9 +405,11 @@ def docx_body_paragraphs(source: Path):
     body = root.find("w:body", {"w": WORD_NS})
     if body is None:
         return None
-    paragraphs = []
+    paragraphs, toc_ends = [], []
     for child in body:
-        if child.tag != "{%s}p" % WORD_NS:
+        if _is_toc_control(child):
+            toc_ends.append(len(paragraphs))
+        if child.tag != "{%s}p" % WORD_NS or _is_toc_link_paragraph(child):
             continue
         boxed = {id(t) for box in child.iter("{%s}txbxContent" % WORD_NS)
                  for t in box.iter("{%s}t" % WORD_NS)}
@@ -284,16 +417,18 @@ def docx_body_paragraphs(source: Path):
         text = re.sub(r"\s+", " ", text).strip()
         if text:
             paragraphs.append(text)
-    return paragraphs
+    return paragraphs, toc_ends
 
 
 def report_text_check(root: Path, source: Path, plain_text: str, progress):
     """文字自检：以「已进入成品的第一段～最后一段」为包络，包络内没匹配上的正文段落点名并给出章节定位。
 
-    封面、目录、免责声明天然落在包络外；整表转图的表内文字不参与（只查顶层段落）。"""
-    paragraphs = docx_body_paragraphs(source)
-    if not paragraphs:
+    封面、目录、免责声明天然落在包络外；整表转图的表内文字不参与（只查顶层段落）。
+    包络起点前移到第一个已匹配段之前最后一个目录控件之后：目录与第一章之间的导语整段丢失时也能报出。"""
+    parsed = docx_body_paragraphs(source)
+    if not parsed or not parsed[0]:
         return None
+    paragraphs, toc_ends = parsed
     out_key = loose_key(plain_text)
     keys = [loose_key(p) for p in paragraphs]
     matched = [bool(k) and k in out_key for k in keys]
@@ -309,7 +444,8 @@ def report_text_check(root: Path, source: Path, plain_text: str, progress):
     total = 0
     misses = []
     last_heading = ""
-    for i in range(anchors[0], anchors[-1] + 1):
+    begin = max([end for end in toc_ends if end <= anchors[0]], default=anchors[0])
+    for i in range(begin, anchors[-1] + 1):
         text, key = paragraphs[i], keys[i]
         if key in outline_keys:
             last_heading = outline_keys[key]

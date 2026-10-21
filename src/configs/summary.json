@@ -17,12 +17,13 @@
     "require_left_align_for_heading": true,
     "fallback_to_first_page": true,
     "strip_leading_markers": true,
-    "detect_heading_by_neighbors": true
+    "detect_heading_by_neighbors": true,
+    "fast_format_runs": true
   },
   "styles": {
     "subheading_bg_color": "#76A2E9",
     "subheading_text_color": "#FFFFFF",
-    "subheading_font_family": "Microsoft YaHei, sans-serif",
+    "subheading_font_family": "mp-quote, PingFang SC, system-ui, -apple-system, BlinkMacSystemFont, Helvetica Neue, Hiragino Sans GB, Microsoft YaHei UI, Microsoft YaHei, Arial, sans-serif",
     "subheading_font_size_px": 14,
     "subheading_line_height": 1.5,
     "subheading_border_radius_px": 8,
